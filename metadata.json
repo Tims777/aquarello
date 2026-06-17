@@ -1,0 +1,6 @@
+{
+  "name": "AI Camera Booth",
+  "description": "A remote-controlled camera booth with AI post-processing and live video feed using WebCodecs.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
