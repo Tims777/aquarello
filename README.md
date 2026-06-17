@@ -1,20 +1,12 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Aquarello
 
-# Run and deploy your AI Studio app
+Aquarello is a photo booth app with optional support for GenAI filters. Fittingly, this app was created in Google AI Studio.
 
-This contains everything you need to run your app locally.
+## Features
 
-View your app in AI Studio: https://ai.studio/apps/f590aada-306c-4ff3-99cc-e3482f7b68b1
-
-## Run Locally
-
-**Prerequisites:**  Node.js
-
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+- Webcam as video source: Take photos using any locally connected camera (support for remote connections planned)
+- Build around the user: Choose the best photo for download / printing or try again using the "retake" button
+- Optional ComfyUI-Integration: Send photos to ComfyUI for GenAI processing
+- Optional Printer-Integration: Send photos to a printer (see [printer-service](./printer-service/README.md) for more details)
+- User configurable: Relevant settings can be changed on the fly in the config UI
+- Modular approach: Integrations are fully optional, turn them off if something fails and keep using the core features
