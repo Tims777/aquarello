@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Printer, RefreshCcw, Check, Loader2, Sparkles, ZoomIn, X, Download, Camera, RotateCw, AlertTriangle } from 'lucide-react';
+import { Printer, RefreshCcw, Check, Loader2, Sparkles, ZoomIn, X, Download, Camera, RotateCw, AlertTriangle, ChevronLeft, ChevronRight, Settings } from 'lucide-react';
 import { PreviewUpdate, FinalResult } from '../types';
 import { t } from '../utils/i18n';
 
@@ -12,6 +12,7 @@ interface ResultViewProps {
   onRegenerate: (variantId: number, customPrompt?: string, keepSeed?: boolean) => void;
   capturedImage: string | null;
   capturedImages: string[];
+  failedCapturesCount?: number;
   parallelJobs: number;
   printerEnabled: boolean;
   selectedPrinterName?: string;
@@ -20,6 +21,10 @@ interface ResultViewProps {
   customPromptModeEnabled?: boolean;
   userPrompt?: string;
   onCancelGeneration?: () => void;
+  genaiFilterOn?: boolean;
+  setGenaiFilterOn?: (val: boolean) => void;
+  isActive?: boolean;
+  onOpenSettings?: () => void;
 }
 
 export default function ResultView({
@@ -30,6 +35,7 @@ export default function ResultView({
   onRegenerate,
   capturedImage,
   capturedImages = [],
+  failedCapturesCount = 0,
   parallelJobs,
   printerEnabled,
   selectedPrinterName,
@@ -38,15 +44,36 @@ export default function ResultView({
   customPromptModeEnabled = false,
   userPrompt = '',
   onCancelGeneration,
+  genaiFilterOn = true,
+  setGenaiFilterOn,
+  isActive = false,
+  onOpenSettings,
 }: ResultViewProps) {
   const [selectedVariants, setSelectedVariants] = useState<number[]>([]);
   const [isPrinting, setIsPrinting] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
-  
-  // "Please change the label to GenAI Filter and invert the logic to be default on"
-  const [genaiFilterOn, setGenaiFilterOn] = useState(true);
+  const [zoomedIndex, setZoomedIndex] = useState<number | null>(null);
 
+  // Discard selection/zoom state when results view is inactive
+  useEffect(() => {
+    if (!isActive) {
+      setSelectedVariants([]);
+      setZoomedImage(null);
+      setZoomedIndex(null);
+    }
+  }, [isActive]);
+  
+  // Helper to dynamically resolve deep image paths for general state sync
+  const getImgUrlForIndex = (i: number) => {
+    const isItemCompleted = !finalResult ? false : (finalResult.completed?.[i] !== false);
+    const rawImg = (capturedImages.length > 0 || failedCapturesCount > 0) ? capturedImages[i] : undefined;
+    const origImg = (typeof rawImg === 'string' ? rawImg : undefined) || displayImage;
+    return isItemCompleted 
+      ? (genaiFilterOn ? (finalResult?.variants?.[i] || displayImage) : origImg) 
+      : ((comfyLivePreviewsEnabled && genaiFilterOn) ? (previews.find(p => p.batch === i)?.preview || origImg) : origImg);
+  };
+  
   // Seed strategy options "Keep / New Seed"
   const [keepSeed, setKeepSeed] = useState(true);
 
@@ -60,7 +87,14 @@ export default function ResultView({
     setCustomPromptText(userPrompt);
   }, [userPrompt]);
 
-  const displayImage = capturedImage || localStorage.getItem('last_captured_image') || "https://picsum.photos/seed/capture/800/1200";
+  const fallbackSvg = `data:image/svg+xml;utf8,${encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1800" viewBox="0 0 1200 1800">
+      <rect width="100%" height="100%" fill="#18181b"/>
+      <text x="600" y="900" fill="#71717a" font-family="system-ui, -apple-system, sans-serif" font-size="24" font-weight="bold" text-anchor="middle">NO CAPTURE SIGNAL</text>
+    </svg>`
+  )}`;
+
+  const displayImage = capturedImage || localStorage.getItem('last_captured_image') || fallbackSvg;
 
   // Dynamic Landscape Orientation Detector
   useEffect(() => {
@@ -78,8 +112,16 @@ export default function ResultView({
   }, [displayImage]);
 
   const triggerRegeneration = () => {
-    // Open prompt and seed option customizer modal
-    setShowCustomPromptModal(true);
+    if (customPromptModeEnabled) {
+      // Open prompt and seed option customizer modal
+      setShowCustomPromptModal(true);
+    } else {
+      if (selectedVariants.length === 0) return;
+      selectedVariants.forEach(idx => {
+        // Just regenerate with default parameters (no custom prompt, don't force keepSeed/newSeed constraints in popup)
+        onRegenerate(idx, undefined, false);
+      });
+    }
   };
 
   const handleStartCustomRegen = () => {
@@ -90,16 +132,63 @@ export default function ResultView({
     setShowCustomPromptModal(false);
   };
 
-  // Escape key support to dismiss the zoomed image
+  // Navigation helper for lightbox zoom
+  const handlePrevZoom = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (zoomedIndex === null) return;
+    const total = (capturedImages.length > 0 || failedCapturesCount > 0) ? capturedImages.length : parallelJobs;
+    if (total <= 1) return;
+    const nextIdx = (zoomedIndex - 1 + total) % total;
+    setZoomedIndex(nextIdx);
+    setZoomedImage(getImgUrlForIndex(nextIdx));
+  };
+
+  const handleNextZoom = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (zoomedIndex === null) return;
+    const total = (capturedImages.length > 0 || failedCapturesCount > 0) ? capturedImages.length : parallelJobs;
+    if (total <= 1) return;
+    const nextIdx = (zoomedIndex + 1) % total;
+    setZoomedIndex(nextIdx);
+    setZoomedImage(getImgUrlForIndex(nextIdx));
+  };
+
+  const toggleCurrentSelection = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (zoomedIndex !== null) {
+      toggleVariantSelection(zoomedIndex);
+    }
+  };
+
+  // Escape key support + ArrowLeft and ArrowRight to navigate zoomed images
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setZoomedImage(null);
+        setZoomedIndex(null);
+      } else if (e.key === 'ArrowLeft') {
+        if (zoomedIndex !== null) {
+          const total = (capturedImages.length > 0 || failedCapturesCount > 0) ? capturedImages.length : parallelJobs;
+          if (total > 1) {
+            const nextIdx = (zoomedIndex - 1 + total) % total;
+            setZoomedIndex(nextIdx);
+            setZoomedImage(getImgUrlForIndex(nextIdx));
+          }
+        }
+      } else if (e.key === 'ArrowRight') {
+        if (zoomedIndex !== null) {
+          const total = (capturedImages.length > 0 || failedCapturesCount > 0) ? capturedImages.length : parallelJobs;
+          if (total > 1) {
+            const nextIdx = (zoomedIndex + 1) % total;
+            setZoomedIndex(nextIdx);
+            setZoomedImage(getImgUrlForIndex(nextIdx));
+          }
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [zoomedIndex, capturedImages.length, parallelJobs, finalResult, genaiFilterOn, comfyLivePreviewsEnabled, previews]);
 
   const handlePrintRequest = () => {
     if (selectedVariants.length === 0) return;
@@ -129,19 +218,49 @@ export default function ResultView({
   };
 
   // Build grid responsive classes based on job count and landscape orientation
-  const gridClass = parallelJobs === 1 
+  const effectiveJobsCount = (capturedImages.length > 0 || failedCapturesCount > 0) ? capturedImages.length : parallelJobs;
+  const gridClass = effectiveJobsCount <= 1 
     ? "max-w-md w-full mx-auto" 
-    : parallelJobs === 2 
+    : effectiveJobsCount === 2 
     ? "grid grid-cols-1 md:grid-cols-2 gap-8 w-full max-w-4xl" 
     : "grid grid-cols-1 md:grid-cols-3 gap-8 w-full max-w-6xl";
 
   return (
-    <div className="min-h-screen bg-[#FCFCFD] text-zinc-900 font-sans p-2 flex flex-col items-center">
+    <div className="min-h-screen bg-[#FCFCFD] text-zinc-900 font-sans p-2 flex flex-col items-center relative">
+      {/* Floating Settings Button for Light Theme */}
+      {onOpenSettings && (
+        <div className="fixed top-8 right-8 z-[100]">
+          <button
+            onClick={onOpenSettings}
+            className="settings-toggle w-12 h-12 bg-white/80 hover:bg-white text-zinc-600 hover:text-zinc-950 border border-zinc-200/90 rounded-full flex items-center justify-center transition-all shadow-md hover:shadow-lg backdrop-blur-md active:scale-95 cursor-pointer"
+            title={t('cameraView.titleSettings')}
+          >
+            <Settings size={20} />
+          </button>
+        </div>
+      )}
+
       {/* Grid container */}
       <div className="w-full max-w-6xl flex-1 flex flex-col justify-center">
+        {/* Failed Captures Unobtrusive Warning */}
+        {failedCapturesCount > 0 && (
+          <div className="mb-4 max-w-lg mx-auto bg-amber-50/70 border border-amber-200/80 rounded-2xl p-3.5 flex items-center gap-3.5 text-amber-800 shadow-sm w-full">
+            <AlertTriangle size={18} className="text-amber-500 flex-shrink-0 animate-pulse" />
+            <div className="flex flex-col">
+              <span className="text-xs font-bold leading-normal text-amber-900">
+                {failedCapturesCount} {failedCapturesCount === 1 ? 'image' : 'images'} failed to capture
+              </span>
+              <span className="text-[10px] text-amber-700/90 leading-tight">
+                Showing only successfully captured images.
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Progress header showing active jobs count in real-time */}
         {(() => {
-          const totalJobs = parallelJobs;
+          if (!genaiEnabled || !genaiFilterOn) return null;
+          const totalJobs = capturedImages.length;
           const completedCount = finalResult?.completed?.filter(c => c).length || 0;
           const hasUnfinished = finalResult && completedCount < totalJobs;
 
@@ -159,16 +278,6 @@ export default function ResultView({
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    {onCancelGeneration && (
-                      <button
-                        onClick={onCancelGeneration}
-                        className="px-3 py-1.5 bg-red-50 hover:bg-red-150 border border-red-200 text-red-600 text-[10px] font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer active:scale-95 flex items-center gap-1.5"
-                        id="cancel-generation-btn"
-                        title="Cancel remaining jobs"
-                      >
-                        Cancel
-                      </button>
-                    )}
                     <span className="text-[9px] font-mono bg-green-50 text-green-700 font-extrabold px-2.5 py-1 rounded-full uppercase">
                       Running
                     </span>
@@ -186,7 +295,9 @@ export default function ResultView({
             <span className="text-[10px] uppercase font-black tracking-widest text-zinc-500">{t('resultView.genaiFilterLabel')}</span>
             <button
               onClick={() => {
-                setGenaiFilterOn(!genaiFilterOn);
+                if (setGenaiFilterOn) {
+                  setGenaiFilterOn(!genaiFilterOn);
+                }
               }}
               className={`relative w-11 h-6 rounded-full p-0.5 transition-colors duration-300 focus:outline-none ${genaiFilterOn ? 'bg-green-500' : 'bg-zinc-300'}`}
               title={t('resultView.genaiFilterTitle')}
@@ -205,38 +316,35 @@ export default function ResultView({
             animate={{ opacity: 1, y: 0 }}
             className={gridClass}
           >
-            {Array.from({ length: parallelJobs }).map((_, idx) => {
+            {((capturedImages.length > 0 || failedCapturesCount > 0) ? capturedImages : Array.from({ length: parallelJobs })).map((rawImg, idx) => {
               const isItemCompleted = !finalResult ? false : (finalResult.completed?.[idx] !== false);
               const isFailed = finalResult?.failed?.[idx] === true;
-              const origImg = capturedImages[idx] || displayImage;
-              
-              // Resolve active live WebSocket preview if configured
-              const livePreview = comfyLivePreviewsEnabled ? (previews.find(p => p.batch === idx)?.preview) : null;
+              const origImg = (typeof rawImg === 'string' ? rawImg : capturedImages[idx]) || displayImage;
               
               const imgUrl = isItemCompleted 
                 ? (genaiFilterOn ? (finalResult?.variants?.[idx] || displayImage) : origImg) 
-                : (livePreview || origImg);
+                : ((comfyLivePreviewsEnabled && genaiFilterOn) ? (previews.find(p => p.batch === idx)?.preview || origImg) : origImg);
 
               const isSelected = selectedVariants.includes(idx);
+              const canInteract = isItemCompleted || !genaiFilterOn;
 
               return (
                 <motion.div 
                   key={idx}
-                  whileHover={isItemCompleted ? { y: -6 } : {}}
                   className={`relative rounded-[1.8rem] overflow-hidden transition-all duration-300 shadow-xl border bg-white group select-none
                     aspect-${isLandscape ? '[4/3]' : '[3/4]'}
-                    ${!isItemCompleted ? 'cursor-wait border-zinc-200 opacity-90' : isSelected ? 'ring-8 ring-green-500 ring-offset-4 border-transparent cursor-pointer' : 'border-zinc-200 hover:border-zinc-300 cursor-pointer'}
+                    ${!canInteract ? 'cursor-wait border-zinc-200 opacity-90' : isSelected ? 'ring-8 ring-green-500 ring-offset-4 border-transparent cursor-pointer' : 'border-zinc-200 hover:border-zinc-300 cursor-pointer'}
                   `}
                   onClick={() => {
-                    if (isItemCompleted) {
+                    if (canInteract) {
                       toggleVariantSelection(idx);
                     }
                   }}
                 >
                   <img 
                     src={imgUrl} 
-                    className={`w-full h-full object-cover transition-all duration-500 ${!isItemCompleted ? 'blur-[4px] scale-102 saturate-50 brightness-95' : ''}`} 
-                    alt={`Variant Output ${idx + 1}`}
+                    className={`w-full h-full object-cover transition-all duration-500 ${(!isItemCompleted && genaiFilterOn) ? 'blur-[4px] scale-102 saturate-50 brightness-95' : ''}`} 
+                    alt={t('resultView.outputLabel', { index: idx + 1 })}
                   />
 
                   {/* Identification badge in lower-left */}
@@ -246,9 +354,9 @@ export default function ResultView({
 
                   {/* GenAI Failure alert display inside the card wrapper if enabled */}
                   {isItemCompleted && genaiFilterOn && isFailed && (
-                    <div className="absolute inset-0 bg-amber-50/95 flex flex-col items-center justify-center p-6 text-center z-20">
+                     <div className="absolute inset-0 bg-amber-50/95 flex flex-col items-center justify-center p-6 text-center z-20">
                       <div className="w-14 h-14 rounded-full bg-amber-100 flex items-center justify-center text-amber-600 mb-3 border border-amber-200">
-                        <AlertTriangle size={24} strokeWidth={2.5} className="animate-bounce" />
+                        <AlertTriangle size={24} strokeWidth={2.5} />
                       </div>
                       <span className="block text-xs font-black uppercase text-amber-800 tracking-wider">{t('resultView.genaiFailedLabel')}</span>
                       <p className="text-[10px] text-zinc-650 mt-1 max-w-[150px] leading-relaxed font-semibold">
@@ -257,8 +365,8 @@ export default function ResultView({
                     </div>
                   )}
 
-                  {!isItemCompleted ? (
-                    /* Processing Glassmorphism Overlay */
+                  {!canInteract ? (
+                     /* Processing Glassmorphism Overlay */
                     <div className="absolute inset-0 bg-white/20 backdrop-blur-[1.5px] flex flex-col items-center justify-center p-6 text-center">
                       <motion.div 
                         animate={{ rotate: 360 }}
@@ -280,23 +388,39 @@ export default function ResultView({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
+                            setZoomedIndex(idx);
                             setZoomedImage(imgUrl);
                           }}
-                          className="absolute bottom-4 right-4 bg-white hover:bg-zinc-100 text-zinc-800 p-2 h-9 w-9 rounded-xl shadow-lg border border-zinc-200 transition-all opacity-0 group-hover:opacity-100 flex items-center justify-center z-10 hover:scale-105"
+                          className="absolute bottom-4 right-4 bg-white hover:bg-zinc-100 text-zinc-800 p-2 h-9 w-9 rounded-xl shadow-lg border border-zinc-200 transition-all flex items-center justify-center z-10 hover:scale-105"
                           title={t('resultView.zoomImage')}
                         >
                           <ZoomIn size={15} />
                         </button>
                       )}
 
-                      {/* Checked frame indicator */}
-                      {isSelected && (
+                      {/* Selection checkmark in the upper-left */}
+                      {isSelected ? (
                         <motion.div 
-                          layoutId="check"
-                          className="absolute top-6 right-6 w-11 h-11 bg-green-500 rounded-full flex items-center justify-center text-white shadow-xl shadow-green-500/30 z-30"
+                          layoutId={`check-${idx}`}
+                          className="absolute top-4 left-4 w-9 h-9 bg-green-500 rounded-full flex items-center justify-center text-white shadow-xl shadow-green-500/30 z-30 cursor-pointer border border-green-600 hover:scale-105 duration-200"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleVariantSelection(idx);
+                          }}
                         >
-                          <Check size={22} strokeWidth={3} />
+                          <Check size={18} strokeWidth={3} />
                         </motion.div>
+                      ) : (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleVariantSelection(idx);
+                          }}
+                          className="absolute top-4 left-4 w-9 h-9 bg-black/40 hover:bg-black/60 text-white rounded-full flex items-center justify-center shadow-lg border border-white/20 z-30 transition-all hover:scale-105"
+                          title={t('resultView.selectImage')}
+                        >
+                          <Check size={16} strokeWidth={2.5} className="opacity-60" />
+                        </button>
                       )}
                     </>
                   )}
@@ -323,7 +447,7 @@ export default function ResultView({
             {printerEnabled ? (
               <button
                 onClick={handlePrintRequest}
-                disabled={selectedVariants.length === 0 || isPrinting || (finalResult && selectedVariants.some(idx => finalResult.completed?.[idx] === false))}
+                disabled={selectedVariants.length === 0 || isPrinting || (genaiFilterOn && finalResult && selectedVariants.some(idx => finalResult.completed?.[idx] === false))}
                 className="bg-zinc-950 hover:bg-green-600 text-white px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-lg transition-all flex items-center gap-2.5 disabled:bg-zinc-100 disabled:text-zinc-400 disabled:shadow-none border border-zinc-200/20 active:scale-95 duration-200"
               >
                 {isPrinting ? (
@@ -354,7 +478,7 @@ export default function ResultView({
                     document.body.removeChild(link);
                   });
                 }}
-                disabled={selectedVariants.length === 0 || (finalResult && selectedVariants.some(idx => finalResult.completed?.[idx] === false))}
+                disabled={selectedVariants.length === 0 || (genaiFilterOn && finalResult && selectedVariants.some(idx => finalResult.completed?.[idx] === false))}
                 className="bg-zinc-950 hover:bg-green-600 text-white px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-lg transition-all flex items-center gap-2.5 disabled:bg-zinc-100 disabled:text-zinc-400 disabled:shadow-none border border-zinc-200/20 active:scale-95 duration-200"
               >
                 <Download size={16} />
@@ -366,7 +490,7 @@ export default function ResultView({
             {genaiEnabled && (
               <button
                 onClick={triggerRegeneration}
-                disabled={selectedVariants.length === 0 || (finalResult && selectedVariants.some(idx => finalResult.completed?.[idx] === false))}
+                disabled={selectedVariants.length === 0 || (genaiFilterOn && finalResult && selectedVariants.some(idx => finalResult.completed?.[idx] === false))}
                 className="bg-white hover:bg-zinc-50 text-zinc-800 px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-xs border border-zinc-200 shadow-md transition-all flex items-center gap-2.5 disabled:bg-zinc-50 disabled:text-zinc-400 disabled:border-zinc-100 active:scale-95 duration-200"
               >
                 <RotateCw size={16} />
@@ -386,29 +510,187 @@ export default function ResultView({
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               className="absolute inset-0 bg-black/95 backdrop-blur-xl"
-              onClick={() => setZoomedImage(null)}
+              onClick={() => {
+                setZoomedImage(null);
+                setZoomedIndex(null);
+              }}
             />
             
+            {/* Title at top center */}
+            {zoomedIndex !== null && (
+              <div className="absolute top-8 left-1/2 -translate-x-1/2 z-[210] flex items-center gap-3 bg-black/60 border border-white/10 px-6 py-3 rounded-full backdrop-blur-xl shadow-2xl pointer-events-none">
+                <span className="text-white font-black uppercase tracking-widest text-sm">
+                  {t('resultView.outputLabel', { index: zoomedIndex + 1 })}
+                </span>
+              </div>
+            )}
+
             {/* Close trigger button */}
             <button 
-              onClick={() => setZoomedImage(null)}
+              onClick={() => {
+                setZoomedImage(null);
+                setZoomedIndex(null);
+              }}
               className="absolute top-8 right-8 z-[210] w-12 h-12 bg-white/10 hover:bg-white/20 border border-white/10 text-white rounded-full flex items-center justify-center transition-all duration-200"
             >
               <X size={20} />
             </button>
 
+            {/* Left navigation arrow */}
+            {((capturedImages.length > 0 || failedCapturesCount > 0) ? capturedImages.length : parallelJobs) > 1 && (
+              <button 
+                onClick={handlePrevZoom}
+                className="absolute left-8 top-1/2 -translate-y-1/2 z-[210] w-14 h-14 bg-white/10 hover:bg-white/20 hover:scale-105 active:scale-95 border border-white/10 text-white rounded-full flex items-center justify-center transition-all duration-200"
+                title={t('common.prev') || 'Previous'}
+              >
+                <ChevronLeft size={28} strokeWidth={2} />
+              </button>
+            )}
+
+            {/* Right navigation arrow */}
+            {((capturedImages.length > 0 || failedCapturesCount > 0) ? capturedImages.length : parallelJobs) > 1 && (
+              <button 
+                onClick={handleNextZoom}
+                className="absolute right-8 top-1/2 -translate-y-1/2 z-[210] w-14 h-14 bg-white/10 hover:bg-white/20 hover:scale-105 active:scale-95 border border-white/10 text-white rounded-full flex items-center justify-center transition-all duration-200"
+                title={t('common.next') || 'Next'}
+              >
+                <ChevronRight size={28} strokeWidth={2} />
+              </button>
+            )}
+
             <motion.div 
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="relative max-w-5xl max-h-[85vh] overflow-hidden rounded-[2rem] border border-white/10 shadow-2xl z-[205]"
+              className={`relative max-w-5xl max-h-[70vh] overflow-hidden rounded-[2rem] border shadow-2xl z-[205] transition-all duration-300 ${
+                zoomedIndex !== null && selectedVariants.includes(zoomedIndex)
+                  ? 'border-green-500 ring-8 ring-green-500/35'
+                  : 'border-white/10'
+              }`}
             >
               <img 
                 src={zoomedImage} 
-                className="w-auto h-auto max-w-full max-h-[85vh] object-contain select-none"
+                className={`w-auto h-auto max-w-full max-h-[70vh] object-contain select-none cursor-pointer rounded-[2rem] transition-all duration-200 ${
+                  zoomedIndex !== null && selectedVariants.includes(zoomedIndex)
+                    ? 'border-4 border-green-500'
+                    : 'border-4 border-transparent hover:border-white/5'
+                }`}
                 alt={t('resultView.zoomedViewAlt')}
+                onClick={toggleCurrentSelection}
               />
+
+              {/* Processing Glassmorphism Overlay inside Lightbox if image is generating */}
+              {zoomedIndex !== null && (!finalResult ? false : (finalResult.completed?.[zoomedIndex] !== false)) === false && genaiFilterOn && (
+                <div className="absolute inset-0 bg-white/20 backdrop-blur-[1.5px] flex flex-col items-center justify-center p-6 text-center pointer-events-none z-20">
+                  <motion.div 
+                    animate={{ rotate: 360 }}
+                    transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
+                    className="mb-3 text-green-500 bg-white p-3.5 rounded-full shadow-lg border border-zinc-100"
+                  >
+                    <Loader2 size={22} className="animate-spin" />
+                  </motion.div>
+                  <div className="bg-white/95 border border-zinc-100/50 p-2.5 px-3.5 rounded-2xl shadow-xl max-w-[150px]">
+                    <p className="text-[9px] uppercase font-black tracking-wider text-zinc-900 leading-none">
+                      {t('common.processing')}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Checkmark inside zoomed image (upper left corner of the image card) */}
+              {zoomedIndex !== null && (
+                selectedVariants.includes(zoomedIndex) ? (
+                  <div 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleCurrentSelection();
+                    }}
+                    className="absolute top-8 left-8 w-12 h-12 bg-green-500 rounded-full flex items-center justify-center text-white shadow-2xl z-30 animate-scaleIn cursor-pointer border border-green-600 hover:scale-105 duration-150"
+                  >
+                    <Check size={24} strokeWidth={3} />
+                  </div>
+                ) : (
+                  <div 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleCurrentSelection();
+                    }}
+                    className="absolute top-8 left-8 w-12 h-12 bg-black/40 hover:bg-black/60 text-white rounded-full flex items-center justify-center shadow-2xl border border-white/20 z-30 cursor-pointer hover:scale-105 duration-150"
+                  >
+                    <Check size={20} strokeWidth={2.5} className="opacity-60" />
+                  </div>
+                )
+              )}
             </motion.div>
+ 
+            {/* Bottom action controls inside lightbox overlay */}
+            {zoomedIndex !== null && (
+              <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-[210] flex items-center gap-3.5 bg-black/60 border border-white/10 px-6 py-4 rounded-3xl backdrop-blur-xl shadow-2xl max-w-full overflow-x-auto">
+                {/* Retake Photo Trigger */}
+                <button
+                  onClick={onRestart}
+                  className="bg-white hover:bg-zinc-50 text-zinc-800 px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-xs border border-zinc-200 shadow-md transition-all flex items-center gap-2.5 active:scale-95 duration-200 whitespace-nowrap flex-shrink-0"
+                >
+                  <Camera size={16} className="text-zinc-500" />
+                  {t('resultView.retakePhotos')}
+                </button>
+                
+                 {/* Print / Save Trigger */}
+                {printerEnabled ? (
+                  <button
+                    onClick={handlePrintRequest}
+                    disabled={selectedVariants.length === 0 || isPrinting || (genaiFilterOn && finalResult && selectedVariants.some(idx => finalResult.completed?.[idx] === false))}
+                    className="bg-zinc-950 hover:bg-green-600 text-white px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-lg transition-all flex items-center gap-2.5 disabled:bg-zinc-850 disabled:text-zinc-500 disabled:shadow-none border border-white/10 active:scale-95 duration-200 whitespace-nowrap flex-shrink-0"
+                  >
+                    {isPrinting ? (
+                      <>
+                        <Loader2 className="animate-spin" size={16} />
+                        {t('resultView.printingJob')}
+                      </>
+                    ) : (
+                      <>
+                        <Printer size={16} />
+                        {t('resultView.printSelectedCount', { count: selectedVariants.length })}
+                      </>
+                    )}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => {
+                      if (selectedVariants.length === 0 || !finalResult) return;
+                      selectedVariants.forEach(idx => {
+                        const targetImg = genaiFilterOn 
+                          ? (finalResult?.variants?.[idx] || displayImage) 
+                          : (capturedImages[idx] || displayImage);
+                        const link = document.createElement('a');
+                        link.href = targetImg;
+                        link.download = `booth-output-${idx + 1}${!genaiFilterOn ? '-original' : ''}.jpg`;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                      });
+                    }}
+                    disabled={selectedVariants.length === 0 || (genaiFilterOn && finalResult && selectedVariants.some(idx => finalResult.completed?.[idx] === false))}
+                    className="bg-zinc-950 hover:bg-green-600 text-white px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-lg transition-all flex items-center gap-2.5 disabled:bg-zinc-850 disabled:text-zinc-500 disabled:shadow-none border border-white/10 active:scale-95 duration-200 whitespace-nowrap flex-shrink-0"
+                  >
+                    <Download size={16} />
+                    {t('resultView.downloadSelectedCount', { count: selectedVariants.length })}
+                  </button>
+                )}
+ 
+                {/* Regenerate Trigger */}
+                {genaiEnabled && (
+                  <button
+                    onClick={triggerRegeneration}
+                    disabled={selectedVariants.length === 0 || (genaiFilterOn && finalResult && selectedVariants.some(idx => finalResult.completed?.[idx] === false))}
+                    className="bg-white hover:bg-zinc-50 text-zinc-800 px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-xs border border-zinc-200 shadow-md transition-all flex items-center gap-2.5 disabled:bg-zinc-850 disabled:text-zinc-500 active:scale-95 duration-200 whitespace-nowrap flex-shrink-0"
+                  >
+                    <RotateCw size={16} />
+                    {t('resultView.regenerateSelectedCount', { count: selectedVariants.length })}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
       </AnimatePresence>
@@ -416,7 +698,7 @@ export default function ResultView({
       {/* Confirmation Window */}
       <AnimatePresence>
         {showConfirm && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[400] flex items-center justify-center p-4">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -463,7 +745,7 @@ export default function ResultView({
       {/* Custom Prompt Edit Overlay Dialog Modal */}
       <AnimatePresence>
         {showCustomPromptModal && (
-          <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/65 backdrop-blur-md">
+          <div className="fixed inset-0 z-[500] flex items-center justify-center p-4 bg-black/65 backdrop-blur-md">
             <motion.div 
               initial={{ opacity: 0, scale: 0.95, y: 15 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}

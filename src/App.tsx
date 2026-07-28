@@ -1,8 +1,3 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import React, { useState, useEffect } from 'react';
 import CameraView from './components/CameraView';
 import ResultView from './components/ResultView';
@@ -31,7 +26,8 @@ export default function App() {
     return localStorage.getItem('selected_webcam_id') || '';
   });
   const [genaiBackendUrl, setGenaiBackendUrl] = useState<string>(() => {
-    return localStorage.getItem('genai_backend_url') || '';
+    const raw = localStorage.getItem('genai_backend_url') || '';
+    return raw.trim().replace(/\/api\/?$/, '');
   });
   const [genaiApiKey, setGenaiApiKey] = useState<string>(() => {
     return localStorage.getItem('genai_api_key') || '';
@@ -93,6 +89,23 @@ export default function App() {
     const saved = localStorage.getItem('custom_prompt_mode_enabled');
     return saved !== null ? saved === 'true' : false;
   });
+
+  const [remoteCameraUrl, setRemoteCameraUrl] = useState<string>(() => {
+    return localStorage.getItem('remote_camera_url') || '';
+  });
+  const [remoteCameraApiKey, setRemoteCameraApiKey] = useState<string>(() => {
+    return localStorage.getItem('remote_camera_api_key') || '';
+  });
+  const [showRemoteActivityLog, setShowRemoteActivityLog] = useState<boolean>(() => {
+    return localStorage.getItem('show_remote_activity_log') === 'true';
+  });
+  const [parallelCapturesEnabled, setParallelCapturesEnabled] = useState<boolean>(() => {
+    return localStorage.getItem('parallel_captures_enabled') === 'true';
+  });
+  const [apiNativeBurstEnabled, setApiNativeBurstEnabled] = useState<boolean>(() => {
+    const saved = localStorage.getItem('api_native_burst_enabled');
+    return saved !== null ? saved === 'true' : true;
+  });
   
   // Sleep mode configuration and state
   const [isAsleep, setIsAsleep] = useState(false);
@@ -104,6 +117,7 @@ export default function App() {
   // Last captured snapshot data-url
   const [lastCapturedImage, setLastCapturedImage] = useState<string | null>(null);
   const [lastCapturedImages, setLastCapturedImages] = useState<string[]>([]);
+  const [failedCapturesCount, setFailedCapturesCount] = useState<number>(0);
 
   // Local processing states instead of WebSocket synchronization
   const [previews, setPreviews] = useState<PreviewUpdate[]>([]);
@@ -113,6 +127,16 @@ export default function App() {
     const saved = localStorage.getItem('exposure_delay');
     return saved !== null ? parseInt(saved, 10) : 0;
   });
+  const [genaiFilterOn, setGenaiFilterOn] = useState<boolean>(true);
+  const [generationTriggered, setGenerationTriggered] = useState<boolean>(false);
+
+  // Trigger delayed generation if user clicks the GenAI toggle inside ResultView
+  useEffect(() => {
+    if (view === 'RESULT' && genaiEnabled && genaiFilterOn && !generationTriggered && lastCapturedImages.length > 0) {
+      console.log('GenAI Filter turned on. Initiating delayed generation pipeline...');
+      handleCapture(lastCapturedImages);
+    }
+  }, [genaiFilterOn, view, genaiEnabled, generationTriggered, lastCapturedImages]);
 
   useEffect(() => {
     if (sleepTimeout <= 0) {
@@ -167,11 +191,45 @@ export default function App() {
   }, []);
 
   const handleCapture = async (images: string[]) => {
+    // Detect failed visual indicators (like error SVGs) and remove them from display list
+    const isErrorImage = (img: string) => {
+      if (!img) return true;
+      let decoded = img;
+      try {
+        decoded = decodeURIComponent(img);
+      } catch (e) {}
+      
+      if (decoded.includes('data:image/svg+xml') && (
+        decoded.includes('CAPTURE OFFLINE') || 
+        decoded.includes('Error') || 
+        decoded.includes('Failed') || 
+        decoded.includes('Webcam Not Active') || 
+        decoded.includes('No Active') || 
+        decoded.includes('Canvas Context') || 
+        decoded.includes('Unavailable') || 
+        decoded.includes('NO CAPTURE SIGNAL') ||
+        decoded.includes('Missing burst frame')
+      )) {
+        return true;
+      }
+      return false;
+    };
+
+    const finalImages = images.filter(img => !isErrorImage(img));
+    const failedCount = images.length - finalImages.length;
+    setFailedCapturesCount(failedCount);
+
     // Primary captured image can just be the first image in the list
-    const base64Image = images[0] || "https://picsum.photos/seed/fallback/800/1200";
+    const fallbackSvg = `data:image/svg+xml;utf8,${encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1800" viewBox="0 0 1200 1800">
+        <rect width="100%" height="100%" fill="#18181b"/>
+        <text x="600" y="900" fill="#71717a" font-family="system-ui, -apple-system, sans-serif" font-size="24" font-weight="bold" text-anchor="middle">NO CAPTURE SIGNAL</text>
+      </svg>`
+    )}`;
+    const base64Image = finalImages[0] || fallbackSvg;
     localStorage.setItem('last_captured_image', base64Image);
     setLastCapturedImage(base64Image);
-    setLastCapturedImages(images);
+    setLastCapturedImages(finalImages);
     setView('RESULT');
 
     setPreviews([]);
@@ -180,16 +238,28 @@ export default function App() {
     if (!genaiEnabled) {
       console.log('GenAI Mode is deactivated. Displaying captured photo(s) instantly.');
       setFinalResult({
-        variants: images,
-        completed: Array(images.length).fill(true)
+        variants: finalImages,
+        completed: Array(finalImages.length).fill(true)
       });
       return;
     }
 
+    if (!genaiFilterOn) {
+      console.log('GenAI Filter is currently off. Deferring generation until activated.');
+      setFinalResult({
+        variants: finalImages,
+        completed: Array(finalImages.length).fill(false)
+      });
+      setGenerationTriggered(false);
+      return;
+    }
+
+    setGenerationTriggered(true);
+
     // Initialize finalResult immediately with original images as placeholders and completed state as false
     setFinalResult({
-      variants: images,
-      completed: Array(images.length).fill(false)
+      variants: finalImages,
+      completed: Array(finalImages.length).fill(false)
     });
 
     // Try ComfyUI integration if URL is configured
@@ -216,7 +286,7 @@ export default function App() {
         // Step 1: Upload input snapshots with encoded timestamps.
         console.log('Uploading snap shots to ComfyUI in parallel...');
         const timestamp = Date.now();
-        const uploadPromises = images.map((img, idx) => {
+        const uploadPromises = finalImages.map((img, idx) => {
           const filename = `booth_upload_${timestamp}_${idx}.jpg`;
           return uploadImageToComfy(config, img, filename);
         });
@@ -237,7 +307,7 @@ export default function App() {
         const basePromptObj = JSON.parse(comfyWorkflow);
         const localSeeds: number[] = [];
 
-        for (let i = 0; i < parallelJobs; i++) {
+        for (let i = 0; i < finalImages.length; i++) {
           const clientId = 'booth_' + Math.random().toString(36).substring(2, 11) + '_' + i;
           
           // Deep clone the base template
@@ -329,7 +399,7 @@ export default function App() {
           }
 
           try {
-            console.log(`Queueing workflow prompt for concurrent Job ${i + 1}/${parallelJobs}...`);
+            console.log(`Queueing workflow prompt for concurrent Job ${i + 1}/${finalImages.length}...`);
             const promptRes = await queuePromptToComfy(config, activePromptObj, clientId);
             jobs.push({
               promptId: promptRes.prompt_id,
@@ -342,8 +412,8 @@ export default function App() {
             console.error(`Queueing prompt failed for concurrent Job ${i + 1}:`, qErr);
             setFinalResult(prev => {
               if (!prev) return prev;
-              const updatedCompleted = prev.completed ? [...prev.completed] : Array(images.length).fill(false);
-              const updatedFailed = prev.failed ? [...prev.failed] : Array(images.length).fill(false);
+              const updatedCompleted = prev.completed ? [...prev.completed] : Array(finalImages.length).fill(false);
+              const updatedFailed = prev.failed ? [...prev.failed] : Array(finalImages.length).fill(false);
               updatedCompleted[i] = true;
               updatedFailed[i] = true;
               return {
@@ -367,11 +437,11 @@ export default function App() {
         const updateVisualPreviews = () => {
           setPreviews(() => {
             const next = [];
-            for (let b = 0; b < parallelJobs; b++) {
+            for (let b = 0; b < finalImages.length; b++) {
               next.push({
                 step: jobs[b].step,
                 batch: b,
-                preview: images[b] || base64Image
+                preview: finalImages[b] || base64Image
               });
             }
             return next;
@@ -411,7 +481,7 @@ export default function App() {
                 }
                 
                 if (!gotImage) {
-                  job.imageUrl = images[i] || base64Image;
+                  job.imageUrl = finalImages[i] || base64Image;
                 }
                 
                 job.completed = true;
@@ -422,9 +492,9 @@ export default function App() {
                 setFinalResult(prev => {
                   if (!prev) return prev;
                   const updatedVariants = [...prev.variants];
-                  const updatedCompleted = prev.completed ? [...prev.completed] : Array(images.length).fill(false);
-                  const updatedFailed = prev.failed ? [...prev.failed] : Array(images.length).fill(false);
-                  updatedVariants[i] = job.imageUrl || images[i] || base64Image;
+                  const updatedCompleted = prev.completed ? [...prev.completed] : Array(finalImages.length).fill(false);
+                  const updatedFailed = prev.failed ? [...prev.failed] : Array(finalImages.length).fill(false);
+                  updatedVariants[i] = job.imageUrl || finalImages[i] || base64Image;
                   updatedCompleted[i] = true;
                   updatedFailed[i] = false;
                   return {
@@ -443,8 +513,8 @@ export default function App() {
                 job.completed = true;
                 setFinalResult(prev => {
                   if (!prev) return prev;
-                  const updatedCompleted = prev.completed ? [...prev.completed] : Array(images.length).fill(false);
-                  const updatedFailed = prev.failed ? [...prev.failed] : Array(images.length).fill(false);
+                  const updatedCompleted = prev.completed ? [...prev.completed] : Array(finalImages.length).fill(false);
+                  const updatedFailed = prev.failed ? [...prev.failed] : Array(finalImages.length).fill(false);
                   updatedCompleted[i] = true;
                   updatedFailed[i] = true;
                   return {
@@ -471,29 +541,25 @@ export default function App() {
         return;
 
       } catch (comfyErr) {
-        console.error('ComfyUI parallel integration encountered errors. Falling back to offline simulation...', comfyErr);
+        console.error('ComfyUI parallel integration encountered errors. Declaring GenAI failure...', comfyErr);
         cleanUp();
-        setFinalResult(prev => {
-          if (!prev) return prev;
-          const completed = Array(images.length).fill(true);
-          const failed = Array(images.length).fill(true);
-          return {
-            ...prev,
-            completed,
-            failed
-          };
+        setFinalResult({
+          variants: finalImages,
+          completed: Array(finalImages.length).fill(true),
+          failed: Array(finalImages.length).fill(true)
         });
+        return;
       }
     }
 
     // Fallback simulation (staggered delay with raw captured photos)
     const timers: NodeJS.Timeout[] = [];
-    images.forEach((img, idx) => {
+    finalImages.forEach((img, idx) => {
       const tId = setTimeout(() => {
         setFinalResult(prev => {
           if (!prev) return prev;
           const updatedVariants = [...prev.variants];
-          const updatedCompleted = [...(prev.completed || Array(images.length).fill(false))];
+          const updatedCompleted = [...(prev.completed || Array(finalImages.length).fill(false))];
           updatedVariants[idx] = img;
           updatedCompleted[idx] = true;
           return {
@@ -514,6 +580,9 @@ export default function App() {
     if (typeof (window as any).__comfyCleanup === 'function') {
       (window as any).__comfyCleanup();
     }
+    setFailedCapturesCount(0);
+    setGenerationTriggered(false);
+    // setGenaiFilterOn(true);
     setView('CAMERA');
   };
 
@@ -746,6 +815,7 @@ export default function App() {
             failed: updatedFailed
           };
         });
+        return;
       }
     }
 
@@ -782,10 +852,16 @@ export default function App() {
     sPrinter: string,
     sEffectsEnabled: boolean,
     comfyPreviewsEnabled: boolean,
-    promptModeEnabled: boolean
+    promptModeEnabled: boolean,
+    rcUrl: string,
+    rcApiKey: string,
+    rcShowLog: boolean,
+    parallelCaptures: boolean,
+    apiNativeBurst: boolean
   ) => {
+    const cleanedUrl = url ? url.trim().replace(/\/api\/?$/, '') : '';
     setSelectedWebcamId(webcamId);
-    setGenaiBackendUrl(url);
+    setGenaiBackendUrl(cleanedUrl);
     setGenaiApiKey(apiKey);
     setSleepTimeout(timeout);
     setComfyWorkflow(workflow);
@@ -802,9 +878,14 @@ export default function App() {
     setSoundEffectsEnabled(sEffectsEnabled);
     setComfyLivePreviewsEnabled(comfyPreviewsEnabled);
     setCustomPromptModeEnabled(promptModeEnabled);
+    setRemoteCameraUrl(rcUrl);
+    setRemoteCameraApiKey(rcApiKey);
+    setShowRemoteActivityLog(rcShowLog);
+    setParallelCapturesEnabled(parallelCaptures);
+    setApiNativeBurstEnabled(apiNativeBurst);
 
     localStorage.setItem('selected_webcam_id', webcamId);
-    localStorage.setItem('genai_backend_url', url);
+    localStorage.setItem('genai_backend_url', cleanedUrl);
     localStorage.setItem('genai_api_key', apiKey);
     localStorage.setItem('sleep_timeout', timeout.toString());
     localStorage.setItem('comfy_workflow', workflow);
@@ -821,6 +902,11 @@ export default function App() {
     localStorage.setItem('sound_effects_enabled', sEffectsEnabled.toString());
     localStorage.setItem('comfy_live_previews_enabled', comfyPreviewsEnabled.toString());
     localStorage.setItem('custom_prompt_mode_enabled', promptModeEnabled.toString());
+    localStorage.setItem('remote_camera_url', rcUrl);
+    localStorage.setItem('remote_camera_api_key', rcApiKey);
+    localStorage.setItem('show_remote_activity_log', rcShowLog.toString());
+    localStorage.setItem('parallel_captures_enabled', parallelCaptures.toString());
+    localStorage.setItem('api_native_burst_enabled', apiNativeBurst.toString());
   };
 
   const handlePrintAction = async (variantId: number, useOriginal = false) => {
@@ -837,22 +923,6 @@ export default function App() {
     }
 
     const config = parsePrinterUrl(printerUrl, printerApiKey);
-    if (!config) {
-      console.error('Invalid print server configurations.');
-      // Auto fallback to download if url is misconfigured
-      try {
-        const link = document.createElement('a');
-        link.href = targetImage;
-        link.download = `booth-variant-${variantId + 1}.jpg`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-      } catch (dlErr) {
-        console.error('Print failure auto-download crashed:', dlErr);
-      }
-      setPrintErrorAlert(t('printerAlert.misconfigured'));
-      return;
-    }
 
     try {
       console.log(`[Print] Submitting variant image index #${variantId + 1} to printer endpoint: ${selectedPrinter}`);
@@ -910,6 +980,12 @@ export default function App() {
             burstDelay={burstDelay}
             soundEffectsEnabled={soundEffectsEnabled}
             onCameraLabelChange={setActiveCameraLabel}
+            isActive={view === 'CAMERA'}
+            remoteCameraUrl={remoteCameraUrl}
+            remoteCameraApiKey={remoteCameraApiKey}
+            showRemoteActivityLog={showRemoteActivityLog}
+            parallelCapturesEnabled={parallelCapturesEnabled}
+            apiNativeBurstEnabled={apiNativeBurstEnabled}
           />
         </div>
         <div className={`w-full h-full absolute inset-0 transition-opacity duration-500 overflow-y-auto ${view === 'RESULT' ? 'opacity-100 z-20 bg-[#FCFCFD]' : 'opacity-0 pointer-events-none z-0'}`}>
@@ -921,6 +997,7 @@ export default function App() {
             onRegenerate={handleRegenerate}
             capturedImage={lastCapturedImage}
             capturedImages={lastCapturedImages}
+            failedCapturesCount={failedCapturesCount}
             parallelJobs={parallelJobs}
             printerEnabled={printerEnabled}
             selectedPrinterName={selectedPrinter}
@@ -929,6 +1006,10 @@ export default function App() {
             customPromptModeEnabled={customPromptModeEnabled}
             userPrompt={userPrompt}
             onCancelGeneration={handleCancelGeneration}
+            genaiFilterOn={genaiFilterOn}
+            setGenaiFilterOn={setGenaiFilterOn}
+            isActive={view === 'RESULT'}
+            onOpenSettings={() => setShowSettings(true)}
           />
         </div>
       </div>
@@ -1006,6 +1087,11 @@ export default function App() {
             printerUrl={printerUrl}
             printerApiKey={printerApiKey}
             selectedPrinter={selectedPrinter}
+            remoteCameraUrl={remoteCameraUrl}
+            remoteCameraApiKey={remoteCameraApiKey}
+            showRemoteActivityLog={showRemoteActivityLog}
+            parallelCapturesEnabled={parallelCapturesEnabled}
+            apiNativeBurstEnabled={apiNativeBurstEnabled}
             onSave={handleSaveSettings}
           />
         )}

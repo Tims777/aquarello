@@ -65,12 +65,18 @@ export function parseComfyUrl(urlStr: string, apiKey?: string): ComfyConfig | nu
     const cleanUrl = new URL(parsed.href);
     cleanUrl.username = '';
     cleanUrl.password = '';
-    const baseUrl = cleanUrl.origin + cleanUrl.pathname.replace(/\/$/, '');
+    
+    // Auto-append /api if pathname does not end with /api
+    let apiPath = cleanUrl.pathname.replace(/\/$/, '');
+    if (!apiPath.endsWith('/api')) {
+      apiPath = apiPath + '/api';
+    }
+    const baseUrl = cleanUrl.origin + apiPath;
     
     // Create WebSocket URL
     const wsProtocol = cleanUrl.protocol === 'https:' ? 'wss' : 'ws';
     const credentialsPart = credentials ? `${encodeURIComponent(parsed.username)}:${encodeURIComponent(parsed.password)}@` : '';
-    const wsUrl = `${wsProtocol}://${credentialsPart}${cleanUrl.host}${cleanUrl.pathname.replace(/\/$/, '')}/ws`;
+    const wsUrl = `${wsProtocol}://${credentialsPart}${cleanUrl.host}${apiPath}/ws`;
     
     return {
       baseUrl,
@@ -84,7 +90,7 @@ export function parseComfyUrl(urlStr: string, apiKey?: string): ComfyConfig | nu
 }
 
 /**
- * Uploads a base64 image to ComfyUI
+ * Uploads a base64 image or remote HTTP image URL to ComfyUI
  */
 export async function uploadImageToComfy(
   config: ComfyConfig,
@@ -93,7 +99,31 @@ export async function uploadImageToComfy(
   type: 'input' | 'output' | 'temp' = 'input',
   subfolder: string = ''
 ): Promise<ComfyUploadResponse> {
-  const blob = dataURLtoBlob(base64Image);
+  let blob: Blob;
+  if (base64Image.startsWith('data:')) {
+    blob = dataURLtoBlob(base64Image);
+  } else {
+    // Remote camera images are fetched directly by the browser. The camera
+    // service must allow this application's origin through CORS.
+    try {
+      const savedApiKey = localStorage.getItem('remote_camera_api_key') || '';
+      const headers: Record<string, string> = {};
+      if (savedApiKey) {
+        headers['Authorization'] = `Bearer ${savedApiKey}`;
+      }
+
+      console.log(`Fetching remote camera image: ${base64Image}`);
+      const response = await fetch(base64Image, { headers });
+      if (!response.ok) {
+        throw new Error(`Remote camera image fetch failed with status ${response.status}`);
+      }
+      blob = await response.blob();
+    } catch (err) {
+      console.error(`Error downloading remote external camera image:`, err);
+      throw err;
+    }
+  }
+
   const formData = new FormData();
   formData.append('image', blob, filename);
   formData.append('overwrite', 'true');
@@ -221,76 +251,4 @@ export async function fetchComfyViewUrl(
  * Default standard placeholder workflow for ComfyUI.
  * Users can update this layout directly in settings to match their model checkpoints or nodes!
  */
-export const DEFAULT_COMFY_WORKFLOW = {
-  "3": {
-    "inputs": {
-      "ckpt_name": "v1-5-pruned-emaonly.safetensors"
-    },
-    "class_type": "CheckpointLoaderSimple",
-    "_meta": { "title": "Load Checkpoint" }
-  },
-  "4": {
-    "inputs": {
-      "text": "photorealistic portrait, high quality, masterpiece, beautiful colors",
-      "clip": ["3", 1]
-    },
-    "class_type": "CLIPTextEncode",
-    "_meta": { "title": "Positive Prompt" }
-  },
-  "5": {
-    "inputs": {
-      "text": "blurry, low quality, bad anatomy, distorted, monochrome",
-      "clip": ["3", 1]
-    },
-    "class_type": "CLIPTextEncode",
-    "_meta": { "title": "Negative Prompt" }
-  },
-  "6": {
-    "inputs": {
-      "image": "REPLACE_IMAGE_NAME",
-      "upload": "image"
-    },
-    "class_type": "LoadImage",
-    "_meta": { "title": "Load Image" }
-  },
-  "7": {
-    "inputs": {
-      "pixels": ["6", 0],
-      "vae": ["3", 2]
-    },
-    "class_type": "VAEEncode",
-    "_meta": { "title": "VAE Encode" }
-  },
-  "8": {
-    "inputs": {
-      "seed": 42,
-      "steps": 20,
-      "cfg": 7,
-      "sampler_name": "euler",
-      "scheduler": "normal",
-      "denoise": 0.5,
-      "model": ["3", 0],
-      "positive": ["4", 0],
-      "negative": ["5", 0],
-      "latent_image": ["7", 0]
-    },
-    "class_type": "KSampler",
-    "_meta": { "title": "KSampler" }
-  },
-  "9": {
-    "inputs": {
-      "samples": ["8", 0],
-      "vae": ["3", 2]
-    },
-    "class_type": "VAEDecode",
-    "_meta": { "title": "VAE Decode" }
-  },
-  "10": {
-    "inputs": {
-      "filename_prefix": "comfy_booth",
-      "images": ["9", 0]
-    },
-    "class_type": "SaveImage",
-    "_meta": { "title": "Save Output Image" }
-  }
-};
+export const DEFAULT_COMFY_WORKFLOW = {};

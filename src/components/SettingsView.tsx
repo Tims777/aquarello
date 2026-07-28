@@ -26,6 +26,12 @@ interface SettingsViewProps {
   printerUrl: string;
   printerApiKey: string;
   selectedPrinter: string;
+  // Remote Camera properties
+  remoteCameraUrl: string;
+  remoteCameraApiKey: string;
+  showRemoteActivityLog: boolean;
+  parallelCapturesEnabled: boolean;
+  apiNativeBurstEnabled: boolean;
   onSave: (
     webcamId: string,
     url: string,
@@ -45,7 +51,13 @@ interface SettingsViewProps {
     selectedPrinter: string,
     soundEffectsEnabled: boolean,
     comfyLivePreviewsEnabled: boolean,
-    customPromptModeEnabled: boolean
+    customPromptModeEnabled: boolean,
+    // Remote camera params
+    remoteCameraUrl: string,
+    remoteCameraApiKey: string,
+    showRemoteActivityLog: boolean,
+    parallelCapturesEnabled: boolean,
+    apiNativeBurstEnabled: boolean
   ) => void;
 }
 
@@ -70,6 +82,11 @@ export default function SettingsView({
   printerApiKey,
   selectedPrinter,
   onSave,
+  remoteCameraUrl,
+  remoteCameraApiKey,
+  showRemoteActivityLog,
+  parallelCapturesEnabled,
+  apiNativeBurstEnabled,
 }: SettingsViewProps) {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [currentWebcam, setCurrentWebcam] = useState(selectedWebcamId);
@@ -86,6 +103,8 @@ export default function SettingsView({
   const [currentSoundEffectsEnabled, setCurrentSoundEffectsEnabled] = useState(soundEffectsEnabled);
   const [isComfyLivePreviewsEnabled, setIsComfyLivePreviewsEnabled] = useState(comfyLivePreviewsEnabled);
   const [isCustomPromptModeEnabled, setIsCustomPromptModeEnabled] = useState(customPromptModeEnabled);
+  const [currentParallelCapturesEnabled, setCurrentParallelCapturesEnabled] = useState(parallelCapturesEnabled || false);
+  const [currentApiNativeBurstEnabled, setCurrentApiNativeBurstEnabled] = useState(apiNativeBurstEnabled ?? true);
 
   // Module 3 - Printer States
   const [isPrinterEnabled, setIsPrinterEnabled] = useState(printerEnabled);
@@ -108,6 +127,115 @@ export default function SettingsView({
   const [printerTestStatus, setPrinterTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [printersList, setPrintersList] = useState<string[]>([]);
   const [printerTestError, setPrinterTestError] = useState<string | null>(null);
+
+  // Module 1 Remote Camera States
+  const [remoteEnabled, setRemoteEnabled] = useState(selectedWebcamId === 'remote-camera');
+  const [remoteUrl, setRemoteUrl] = useState(remoteCameraUrl || '');
+  const [remoteApiKey, setRemoteApiKey] = useState(remoteCameraApiKey || '');
+  const [cameraTestStatus, setCameraTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [cameraTestError, setCameraTestError] = useState<string | null>(null);
+  const [remoteCameraModel, setRemoteCameraModel] = useState<string | null>(null);
+  const [currentShowActivityLog, setCurrentShowActivityLog] = useState(showRemoteActivityLog || false);
+
+  const handleVerifyCameraConnection = async () => {
+    setCameraTestStatus('testing');
+    setCameraTestError(null);
+    setRemoteCameraModel(null);
+
+    try {
+      const url = remoteUrl ? (remoteUrl.endsWith('/') ? remoteUrl.slice(0, -1) : remoteUrl) : '';
+      const connectUrl = url ? `${url}/api/connect` : '/api/connect';
+      const statusUrl = url ? `${url}/api/status` : '/api/status';
+      
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      if (remoteApiKey) {
+        headers['Authorization'] = `Bearer ${remoteApiKey}`;
+      }
+
+      // Try connection first
+      await fetch(connectUrl, { method: 'POST', headers });
+      
+      const res = await fetch(statusUrl, { headers });
+      if (!res.ok) {
+        throw new Error(`Device API returned status ${res.status}`);
+      }
+      
+      const data = await res.json();
+      if (data && data.connected) {
+        setRemoteCameraModel(data.model || 'Canon EOS R5');
+        setCameraTestStatus('success');
+      } else {
+        throw new Error(data && data.model === 'No camera' ? t('settingsView.physicalCameraDisconnected') : 'Internal connection offline.');
+      }
+    } catch (err: any) {
+      console.error('Remote camera verification error:', err);
+      setCameraTestError(err.message || t('settingsView.verificationCallFailed'));
+      setCameraTestStatus('error');
+    }
+  };
+
+  const handleConnectCamera = async () => {
+    setCameraTestStatus('testing');
+    setCameraTestError(null);
+    setRemoteCameraModel(null);
+
+    try {
+      const url = remoteUrl ? (remoteUrl.endsWith('/') ? remoteUrl.slice(0, -1) : remoteUrl) : '';
+      const connectUrl = url ? `${url}/api/connect` : '/api/connect';
+      
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      if (remoteApiKey) {
+        headers['Authorization'] = `Bearer ${remoteApiKey}`;
+      }
+      
+      const res = await fetch(connectUrl, { method: 'POST', headers });
+      if (!res.ok) {
+        throw new Error(`Connect returned status ${res.status}`);
+      }
+      
+      const data = await res.json();
+      setCameraTestStatus('success');
+      const model = (data.status && data.status.model) || data.model || 'Canon EOS R5';
+      setRemoteCameraModel(model);
+    } catch (err: any) {
+      console.error('Remote camera connect error:', err);
+      setCameraTestError(err.message || t('settingsView.connectCallFailed'));
+      setCameraTestStatus('error');
+    }
+  };
+
+  const handleDisconnectCamera = async () => {
+    setCameraTestStatus('testing');
+    setCameraTestError(null);
+
+    try {
+      const url = remoteUrl ? (remoteUrl.endsWith('/') ? remoteUrl.slice(0, -1) : remoteUrl) : '';
+      const disconnectUrl = url ? `${url}/api/disconnect` : '/api/disconnect';
+      
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      if (remoteApiKey) {
+        headers['Authorization'] = `Bearer ${remoteApiKey}`;
+      }
+      
+      const res = await fetch(disconnectUrl, { method: 'POST', headers });
+      if (!res.ok) {
+        throw new Error(`Disconnect returned status ${res.status}`);
+      }
+      
+      setCameraTestStatus('idle');
+      setRemoteCameraModel(null);
+    } catch (err: any) {
+      console.error('Remote camera disconnect error:', err);
+      setCameraTestError(err.message || t('settingsView.disconnectCallFailed'));
+      setCameraTestStatus('error');
+    }
+  };
 
   const handleVerifyConnection = async () => {
     if (!backendUrl) {
@@ -204,7 +332,7 @@ export default function SettingsView({
 
     const config = parsePrinterUrl(currentPrinterUrl, currentPrinterApiKey);
     if (!config) {
-      setPrinterTestError('Invalid URL format. Please check the printer server URL.');
+      setPrinterTestError(t('settingsView.invalidPrinterUrlError'));
       setPrinterTestStatus('error');
       return;
     }
@@ -218,7 +346,7 @@ export default function SettingsView({
       }
     } catch (err: any) {
       console.error('Printer connection test error:', err);
-      setPrinterTestError(err.message || 'Connecting to printer server failed. Check host availability, CORS or API Key.');
+      setPrinterTestError(err.message || t('settingsView.printerTestFailedError'));
       setPrinterTestStatus('error');
     }
   };
@@ -300,7 +428,13 @@ export default function SettingsView({
       currentSelectedPrinter,
       currentSoundEffectsEnabled,
       isComfyLivePreviewsEnabled,
-      isCustomPromptModeEnabled
+      isCustomPromptModeEnabled,
+      // Remote camera configs
+      remoteUrl,
+      remoteApiKey,
+      currentShowActivityLog,
+      currentParallelCapturesEnabled,
+      currentApiNativeBurstEnabled
     );
     setTimeout(() => {
       setSaveStatus('saved');
@@ -335,11 +469,6 @@ export default function SettingsView({
         {/* Header toolbar */}
         <div id="settings-header" className="p-6 pb-4 flex justify-between items-start border-b border-zinc-100">
           <div>
-            <div className="flex items-center gap-2 mb-1">
-              <span className="p-1 px-2.5 text-[9px] bg-green-50 text-green-600 rounded-full font-black uppercase tracking-wider">
-                System Interface
-              </span>
-            </div>
             <h2 className="text-xl font-black tracking-tight uppercase text-zinc-900 flex items-center gap-2">
               <Sliders className="text-green-500" size={20} />
               {t('settingsView.title')}
@@ -361,63 +490,226 @@ export default function SettingsView({
           {/* MODULE 1: WEBCAM                                           */}
           {/* ========================================================== */}
           <section id="module-webcam-card" className="bg-white border border-zinc-150 rounded-2xl p-5 shadow-sm space-y-4">
-            <div className="flex justify-between items-start">
+            <div className="flex justify-between items-center bg-zinc-50/25 p-3 rounded-xl border border-zinc-100/80">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-green-50 flex items-center justify-center text-green-500">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+                  remoteEnabled ? 'bg-green-50 text-green-500' : 'bg-zinc-100 text-zinc-400'
+                }`}>
                   <Camera size={16} />
                 </div>
                 <div>
                   <h3 className="text-xs font-black uppercase tracking-wider text-zinc-450">{t('settingsView.webcamHeader')}</h3>
-                  <h4 className="text-sm font-bold text-zinc-805 -mt-0.5">{t('settingsView.webcamSub')}</h4>
+                  <h4 className="text-sm font-bold text-zinc-805 -mt-0.5">{t('settingsView.remoteCamera')}</h4>
                 </div>
               </div>
-              <span className="p-1 px-2 text-[9px] bg-green-50 text-green-600 border border-green-100 rounded-lg font-black uppercase tracking-wider">
-                {t('settingsView.statusAlwaysEngaged')}
-              </span>
+              
+              <div className="flex items-center gap-2">
+                <span className={`text-[10px] uppercase font-bold tracking-tight ${
+                  remoteEnabled ? 'text-green-600' : 'text-zinc-400'
+                }`}>
+                  {remoteEnabled ? t('common.enabled') : t('common.disabled')}
+                </span>
+                <button
+                  id="remote-camera-toggle-switch"
+                  type="button"
+                  onClick={() => {
+                    const nextVal = !remoteEnabled;
+                    setRemoteEnabled(nextVal);
+                    if (nextVal) {
+                      setCurrentWebcam('remote-camera');
+                    } else {
+                      setCurrentWebcam('');
+                    }
+                  }}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    remoteEnabled ? 'bg-green-500' : 'bg-zinc-200'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      remoteEnabled ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
             </div>
 
             <hr className="border-zinc-100" />
 
-            {!permissionGranted && (
-              <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2.5">
-                <ShieldAlert className="text-amber-500 flex-shrink-0 mt-0.5" size={16} />
-                <div className="flex-1">
-                  <h4 className="text-xs font-bold text-amber-900 leading-tight">{t('settingsView.cameraRestrained')}</h4>
-                  <p className="text-[10px] text-amber-700 mt-1 leading-normal">
-                    {t('settingsView.privilegesDescription')}
-                  </p>
-                  <button 
-                    onClick={requestPermission}
-                    className="mt-2 text-[10px] font-black uppercase text-amber-900 bg-amber-200/50 hover:bg-amber-200/80 px-2.5 py-1 rounded-lg transition-all"
-                  >
-                    {t('settingsView.authorizeDevice')}
-                  </button>
+            {!remoteEnabled && (
+              <div className="p-3 bg-zinc-50 border border-zinc-250 rounded-xl">
+                <div className="flex items-center gap-2">
+                  <Info size={14} className="text-zinc-500" />
+                  <span className="text-[10px] text-zinc-500 font-sans">
+                    {t('settingsView.remoteCameraDeactivated')}
+                  </span>
+                </div>
+
+                {/* Feed Source Selector */}
+                <div className="mt-2 flex flex-col gap-1.5">
+                  <label className="text-[10px] uppercase tracking-wider font-extrabold text-zinc-500 flex items-center gap-1">
+                    {t('settingsView.feedSourceLabel')}
+                  </label>
+                  <div className="relative">
+                    <select
+                      value={currentWebcam}
+                      onChange={(e) => setCurrentWebcam(e.target.value)}
+                      className="w-full bg-zinc-50 border border-zinc-200 text-zinc-805 text-xs font-semibold rounded-xl p-3 pr-9 focus:outline-none focus:ring-1 focus:ring-green-500 focus:border-green-500 cursor-pointer appearance-none transition-all"
+                    >
+                      <option value="">{t('settingsView.defaultOptionCamera')}</option>
+                      {devices.map((device, idx) => (
+                        <option key={device.deviceId} value={device.deviceId}>
+                          {device.label || t('settingsView.videoInputModule', { index: idx + 1 })}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-400">
+                      <Camera size={14} />
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Feed Source Selector */}
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] uppercase tracking-wider font-extrabold text-zinc-500 flex items-center gap-1">
-                  {t('settingsView.feedSourceLabel')}
-                </label>
-                <div className="relative">
-                  <select
-                    value={currentWebcam}
-                    onChange={(e) => setCurrentWebcam(e.target.value)}
-                    className="w-full bg-zinc-50 border border-zinc-200 text-zinc-805 text-xs font-semibold rounded-xl p-3 pr-9 focus:outline-none focus:ring-1 focus:ring-green-500 focus:border-green-500 cursor-pointer appearance-none transition-all"
-                  >
-                    <option value="">{t('settingsView.defaultOptionCamera')}</option>
-                    {devices.map((device, idx) => (
-                      <option key={device.deviceId} value={device.deviceId}>
-                        {device.label || t('settingsView.videoInputModule', { index: idx + 1 })}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-400">
-                    <Camera size={14} />
+             <div>
+               {/* Remote Camera Single Row Layout */}
+               <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+                 {/* Remote Camera URL */}
+                 <div className="md:col-span-6 flex flex-col gap-1.5">
+                   <label className={`text-[10px] uppercase tracking-wider font-extrabold transition-colors ${
+                     remoteEnabled ? 'text-zinc-500' : 'text-zinc-300'
+                   }`}>
+                     {t('settingsView.remoteCameraServerUrl')}
+                   </label>
+                   <div className="relative">
+                     <input
+                       type="url"
+                       value={remoteUrl}
+                       onChange={(e) => setRemoteUrl(e.target.value)}
+                       placeholder="e.g. http://localhost:5000"
+                       disabled={!remoteEnabled}
+                       className="w-full bg-white disabled:bg-zinc-50 border border-zinc-200 disabled:border-zinc-100 text-zinc-800 disabled:text-zinc-300 text-xs font-semibold rounded-xl p-3 pr-9 focus:outline-none focus:ring-1 focus:ring-green-500 font-mono disabled:cursor-not-allowed transition-all"
+                     />
+                     <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-400">
+                       <Globe size={14} />
+                     </div>
+                   </div>
+                 </div>
+
+                 {/* API Key */}
+                 <div className="md:col-span-4 flex flex-col gap-1.5">
+                   <label className={`text-[10px] uppercase tracking-wider font-extrabold transition-colors ${
+                     remoteEnabled ? 'text-zinc-500' : 'text-zinc-300'
+                   }`}>
+                     {t('settingsView.remoteCameraApiKey')}
+                   </label>
+                   <div className="relative">
+                     <input
+                       type="password"
+                       value={remoteApiKey}
+                       onChange={(e) => setRemoteApiKey(e.target.value)}
+                       placeholder="X-API-Key value"
+                       disabled={!remoteEnabled}
+                       className="w-full bg-white disabled:bg-zinc-50 border border-zinc-200 disabled:border-zinc-100 text-zinc-805 disabled:text-zinc-300 text-xs font-semibold rounded-xl p-3 pr-9 focus:outline-none focus:ring-1 focus:ring-green-500 font-mono disabled:cursor-not-allowed transition-all"
+                     />
+                     <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-400">
+                       <Key size={14} />
+                     </div>
+                   </div>
+                 </div>
+
+                 {/* Test Button */}
+                 <div className="md:col-span-2">
+                   <button
+                     type="button"
+                     onClick={handleVerifyCameraConnection}
+                     disabled={!remoteEnabled || cameraTestStatus === 'testing'}
+                     className="w-full h-[42px] px-4 py-2 bg-zinc-105 hover:bg-zinc-202 disabled:bg-zinc-50/50 disabled:opacity-50 text-zinc-805 disabled:text-zinc-300 text-xs font-bold rounded-xl border border-zinc-200 disabled:border-zinc-100 transition-all cursor-pointer whitespace-nowrap flex items-center justify-center active:scale-95 disabled:pointer-events-none"
+                   >
+                     {cameraTestStatus === 'testing' ? t('settingsView.testingConnection') : t('settingsView.testConnectionBtn')}
+                   </button>
+                 </div>
+               </div>
+
+               {/* Controls and Toggles status representations */}
+               {remoteEnabled && (
+                  <div className="flex flex-col gap-3 pt-1">
+                    {cameraTestStatus === 'testing' && (
+                      <div className="p-3 bg-white border border-zinc-200 text-zinc-650 rounded-xl text-xs flex items-center gap-2">
+                        <div className="w-3.5 h-3.5 border-2 border-green-500 border-t-transparent rounded-full animate-spin" />
+                        <span>{t('settingsView.processingCameraOperation')}</span>
+                      </div>
+                    )}
+
+                    {cameraTestStatus === 'success' && (
+                      <div className="p-3 bg-green-50 border border-green-200 text-green-800 rounded-xl text-xs space-y-1">
+                        <div className="font-bold flex items-center gap-1.5 text-green-900">
+                          <Check size={14} className="text-green-600" /> {t('settingsView.cameraHandshakeSucceeded')}
+                        </div>
+                        <div className="font-mono text-[10px] text-green-700">
+                          {t('settingsView.cameraModelLabel', { model: remoteCameraModel })}
+                        </div>
+                      </div>
+                    )}
+
+                    {cameraTestStatus === 'error' && cameraTestError && (
+                      <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs space-y-1">
+                        <div className="font-bold">{t('settingsView.cameraConnectionFailed')}</div>
+                        <div className="font-mono text-[10px] text-red-700 leading-normal">{cameraTestError}</div>
+                      </div>
+                    )}
                   </div>
+               )}
+             </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* n_captures selector */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] uppercase tracking-wider font-extrabold text-zinc-500">
+                  {t('settingsView.capturesCountLabel')}
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    value={currentParallelJobs}
+                    onChange={(e) => setCurrentParallelJobs(Math.max(1, parseInt(e.target.value) || 1))}
+                    className="w-full bg-zinc-50 border border-zinc-200 text-zinc-805 text-xs font-semibold rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-green-500 font-mono"
+                    min={1}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setCurrentParallelJobs(1)}
+                    className="px-4 py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-707 text-xs font-bold rounded-xl border border-zinc-200 transition-all cursor-pointer whitespace-nowrap active:scale-95"
+                  >
+                    {t('common.reset')}
+                  </button>
+                </div>
+              </div>
+
+              {/* burst delay in ms */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] uppercase tracking-wider font-extrabold text-zinc-500">
+                  {t('settingsView.burstDelayLabel')}
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    value={currentBurstDelay}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value);
+                      setCurrentBurstDelay(isNaN(val) ? 0 : Math.max(0, val));
+                    }}
+                    className="w-full bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs font-semibold rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-green-500 font-mono"
+                    min={0}
+                    placeholder={t('settingsView.burstDelayPlaceholder')}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setCurrentBurstDelay(500)}
+                    className="px-4 py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-707 text-xs font-bold rounded-xl border border-zinc-200 transition-all cursor-pointer whitespace-nowrap active:scale-95"
+                  >
+                    {t('common.reset')}
+                  </button>
                 </div>
               </div>
 
@@ -440,29 +732,6 @@ export default function SettingsView({
                   <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-400 font-mono text-xs">
                     ↻
                   </div>
-                </div>
-              </div>
-
-              {/* n_captures selector */}
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] uppercase tracking-wider font-extrabold text-zinc-500">
-                  {t('settingsView.capturesCountLabel')}
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="number"
-                    value={currentParallelJobs}
-                    onChange={(e) => setCurrentParallelJobs(Math.max(1, parseInt(e.target.value) || 1))}
-                    className="w-full bg-zinc-50 border border-zinc-200 text-zinc-805 text-xs font-semibold rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-green-500 font-mono"
-                    min={1}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setCurrentParallelJobs(1)}
-                    className="px-4 py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-707 text-xs font-bold rounded-xl border border-zinc-200 transition-all cursor-pointer whitespace-nowrap active:scale-95"
-                  >
-                    {t('common.reset')}
-                  </button>
                 </div>
               </div>
 
@@ -494,36 +763,6 @@ export default function SettingsView({
               </div>
             </div>
 
-            {/* burst delay in ms */}
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[10px] uppercase tracking-wider font-extrabold text-zinc-500">
-                {t('settingsView.burstDelayLabel')}
-              </label>
-              <div className="flex gap-2">
-                <input
-                  type="number"
-                  value={currentBurstDelay}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value);
-                    setCurrentBurstDelay(isNaN(val) ? 0 : Math.max(0, val));
-                  }}
-                  className="w-full bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs font-semibold rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-green-500 font-mono"
-                  min={0}
-                  placeholder={t('settingsView.burstDelayPlaceholder')}
-                />
-                <button
-                  type="button"
-                  onClick={() => setCurrentBurstDelay(500)}
-                  className="px-4 py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 text-xs font-bold rounded-xl border border-zinc-200 transition-all cursor-pointer whitespace-nowrap active:scale-95"
-                >
-                  {t('common.reset')}
-                </button>
-              </div>
-              <span className="text-[10px] text-zinc-400 font-sans italic">
-                {t('settingsView.burstDelayDescription')}
-              </span>
-            </div>
-
             {/* Sound effects toggle */}
             <div className="flex justify-between items-center bg-zinc-50 border border-zinc-200 rounded-xl p-3">
               <div className="flex flex-col">
@@ -546,6 +785,77 @@ export default function SettingsView({
                 />
               </button>
             </div>
+
+            {/* Show Remote Activity Log Toggle */}
+            <div className="flex justify-between items-center bg-zinc-50 border border-zinc-200 rounded-xl p-3">
+              <div className="flex flex-col">
+                <span className="text-xs font-bold text-zinc-850">{t('settingsView.showActivityLog')}</span>
+                <span className="text-[10px] text-zinc-400 font-sans">
+                  {t('settingsView.displayRemoteEvents')}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCurrentShowActivityLog(prev => !prev)}
+                className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  currentShowActivityLog ? 'bg-green-500' : 'bg-zinc-200'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                    currentShowActivityLog ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* API-Native DSLR Burst Toggle */}
+            <div className="flex justify-between items-center bg-zinc-50 border border-zinc-200 rounded-xl p-3">
+              <div className="flex flex-col">
+                <span className="text-xs font-bold text-zinc-850">{t('settingsView.apiNativeDslrBurst')}</span>
+                <span className="text-[10px] text-zinc-400 font-sans">
+                  {t('settingsView.apiNativeDslrBurstSub')}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCurrentApiNativeBurstEnabled(prev => !prev)}
+                className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  currentApiNativeBurstEnabled ? 'bg-green-500' : 'bg-zinc-200'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                    currentApiNativeBurstEnabled ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* Parallel App Captures Toggle (Visible only when API-Native burst is disabled) */}
+            {!currentApiNativeBurstEnabled && (
+              <div className="flex justify-between items-center bg-zinc-50 border border-zinc-200 rounded-xl p-3 ml-4 border-l-4 border-l-green-500">
+                <div className="flex flex-col">
+                  <span className="text-xs font-bold text-zinc-850">{t('settingsView.parallelAppCaptures')}</span>
+                  <span className="text-[10px] text-zinc-400 font-sans">
+                    {t('settingsView.parallelAppCapturesSub')}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCurrentParallelCapturesEnabled(prev => !prev)}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    currentParallelCapturesEnabled ? 'bg-green-500' : 'bg-zinc-200'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      currentParallelCapturesEnabled ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+            )}
           </section>
 
           {/* ========================================================== */}
@@ -592,9 +902,7 @@ export default function SettingsView({
             <hr className="border-zinc-100" />
 
             {/* Container dims visual content nicely if GenAI pipeline toggle is bypass */}
-            <div className={`space-y-4 transition-all duration-300 ${
-              isGenaiEnabled ? 'opacity-100' : 'opacity-60 pointer-events-auto filter grayscale-[15%]'
-            }`}>
+            <div className={`space-y-4 transition-all duration-300`}>
               {!isGenaiEnabled && (
                 <div className="p-3 bg-zinc-50 border border-zinc-250 rounded-xl flex items-center gap-2">
                   <Info size={14} className="text-zinc-500" />
@@ -604,10 +912,12 @@ export default function SettingsView({
                 </div>
               )}
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
                 {/* ComfyUI endpoint URL */}
-                <div className="flex flex-col gap-1.5 col-span-1 md:col-span-2">
-                  <label className="text-[10px] uppercase tracking-wider font-extrabold text-zinc-500">
+                <div className="md:col-span-6 flex flex-col gap-1.5">
+                  <label className={`text-[10px] uppercase tracking-wider font-extrabold transition-colors ${
+                    isGenaiEnabled ? 'text-zinc-500' : 'text-zinc-300'
+                  }`}>
                     {t('settingsView.comfyUrlLabel')}
                   </label>
                   <div className="relative">
@@ -616,7 +926,8 @@ export default function SettingsView({
                       value={backendUrl}
                       onChange={(e) => setBackendUrl(e.target.value)}
                       placeholder={t('settingsView.comfyUrlPlaceholder')}
-                      className="w-full bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs font-semibold rounded-xl p-3 pr-9 focus:outline-none focus:ring-1 focus:ring-green-500 font-mono"
+                      disabled={!isGenaiEnabled}
+                      className="w-full bg-zinc-50 disabled:bg-zinc-50/50 border border-zinc-200 disabled:border-zinc-100 text-zinc-805 disabled:text-zinc-300 text-xs font-semibold rounded-xl p-3 pr-9 focus:outline-none focus:ring-1 focus:ring-green-500 font-mono disabled:cursor-not-allowed transition-all"
                     />
                     <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-400">
                       <Globe size={14} />
@@ -625,8 +936,10 @@ export default function SettingsView({
                 </div>
 
                 {/* Optional Key secret header */}
-                <div className="flex flex-col gap-1.5 col-span-1 md:col-span-2">
-                  <label className="text-[10px] uppercase tracking-wider font-extrabold text-zinc-500">
+                <div className="md:col-span-4 flex flex-col gap-1.5">
+                  <label className={`text-[10px] uppercase tracking-wider font-extrabold transition-colors ${
+                    isGenaiEnabled ? 'text-zinc-500' : 'text-zinc-300'
+                  }`}>
                     {t('settingsView.apiKeyLabel')}
                   </label>
                   <div className="relative">
@@ -635,26 +948,30 @@ export default function SettingsView({
                       value={backendApiKey}
                       onChange={(e) => setBackendApiKey(e.target.value)}
                       placeholder={t('settingsView.apiKeyPlaceholder')}
-                      className="w-full bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs font-semibold rounded-xl p-3 pr-9 focus:outline-none focus:ring-1 focus:ring-green-500 font-mono"
+                      disabled={!isGenaiEnabled}
+                      className="w-full bg-zinc-50 disabled:bg-zinc-50/50 border border-zinc-200 disabled:border-zinc-100 text-zinc-800 disabled:text-zinc-300 text-xs font-semibold rounded-xl p-3 pr-9 focus:outline-none focus:ring-1 focus:ring-green-500 font-mono disabled:cursor-not-allowed transition-all"
                     />
                     <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-400">
                       <Key size={14} />
                     </div>
                   </div>
                 </div>
+
+                {/* Test Button */}
+                <div className="md:col-span-2">
+                  <button
+                    type="button"
+                    onClick={handleVerifyConnection}
+                    disabled={!isGenaiEnabled || testStatus === 'testing'}
+                    className="w-full h-[42px] px-4 py-2 bg-zinc-100 hover:bg-zinc-200 disabled:bg-zinc-50/50 disabled:opacity-50 text-zinc-805 disabled:text-zinc-300 text-xs font-bold rounded-xl border border-zinc-200 disabled:border-zinc-100 transition-all cursor-pointer whitespace-nowrap flex items-center justify-center active:scale-95 disabled:pointer-events-none"
+                  >
+                    {testStatus === 'testing' ? t('settingsView.testingConnection') : t('settingsView.testConnectionBtn')}
+                  </button>
+                </div>
               </div>
 
-              {/* Test Connection Button Trigger */}
+              {/* Connection Status representations */}
               <div className="flex flex-col gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={handleVerifyConnection}
-                  disabled={testStatus === 'testing'}
-                  className="px-4 py-2 bg-zinc-100 hover:bg-zinc-250 disabled:opacity-50 text-zinc-700 text-[10px] font-black uppercase tracking-wider rounded-xl border border-zinc-200/60 shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer w-fit"
-                >
-                  {testStatus === 'testing' ? t('settingsView.testingConnection') : t('settingsView.testConnectionBtn')}
-                </button>
-
                 {testStatus === 'testing' && (
                   <div className="p-3 bg-zinc-50 border border-zinc-200 text-zinc-650 rounded-xl text-xs space-y-2">
                     <div className="flex items-center gap-2">
@@ -687,7 +1004,6 @@ export default function SettingsView({
                         <div className="flex items-start gap-2 text-[11px] text-green-850">
                           <Check size={12} strokeWidth={3} className="text-green-600 mt-0.5" />
                           <div>
-                            <span className="font-extrabold uppercase tracking-wide text-[9px] block text-green-800">WebSocket Live Preview Check</span>
                             <p className="mt-0.5 leading-normal font-semibold font-sans">{t('settingsView.wsTestSuccess')}</p>
                           </div>
                         </div>
@@ -695,7 +1011,6 @@ export default function SettingsView({
                         <div className="flex items-start gap-2 text-[11px] text-amber-900 bg-amber-50/60 p-2.5 rounded-lg border border-amber-200">
                           <div className="w-2 h-2 rounded-full bg-amber-500 mt-1.5 animate-pulse flex-shrink-0" />
                           <div>
-                            <span className="font-extrabold uppercase tracking-wide text-[9px] block text-amber-800">WebSocket Handshake Warning</span>
                             <p className="mt-0.5 leading-normal font-semibold font-sans">{t('settingsView.wsTestFailed')}</p>
                           </div>
                         </div>
@@ -839,9 +1154,9 @@ export default function SettingsView({
               {/* ComfyUI Live Previews toggle */}
               <div className="flex justify-between items-center bg-zinc-50 border border-zinc-200 rounded-xl p-3">
                 <div className="flex flex-col pr-4">
-                  <span className="text-xs font-bold text-zinc-850">ComfyUI Live Previews</span>
+                  <span className="text-xs font-bold text-zinc-850">{t('settingsView.comfyLivePreviews')}</span>
                   <span className="text-[10px] text-zinc-400 font-sans">
-                    Show progress live previews from ComfyUI websockets during generation.
+                    {t('settingsView.comfyLivePreviewsSub')}
                   </span>
                 </div>
                 <button
@@ -862,9 +1177,9 @@ export default function SettingsView({
               {/* Custom Prompt Mode toggle */}
               <div className="flex justify-between items-center bg-zinc-50 border border-zinc-200 rounded-xl p-3">
                 <div className="flex flex-col pr-4">
-                  <span className="text-xs font-bold text-zinc-850">Custom Prompt Mode</span>
+                  <span className="text-xs font-bold text-zinc-850">{t('settingsView.customPromptMode')}</span>
                   <span className="text-[10px] text-zinc-400 font-sans">
-                    Allow raw description changes and prompt custom edits on regeneration.
+                    {t('settingsView.customPromptModeSub')}
                   </span>
                 </div>
                 <button
@@ -939,19 +1254,22 @@ export default function SettingsView({
                 </div>
               )}
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
                 {/* Printer server endpoint URL */}
-                <div className="flex flex-col gap-1.5 col-span-1 md:col-span-2">
-                  <label className="text-[10px] uppercase tracking-wider font-extrabold text-zinc-500">
+                <div className="md:col-span-6 flex flex-col gap-1.5">
+                  <label className={`text-[10px] uppercase tracking-wider font-extrabold transition-colors ${
+                    isPrinterEnabled ? 'text-zinc-500' : 'text-zinc-300'
+                  }`}>
                     {t('settingsView.printerUrlLabel')}
                   </label>
                   <div className="relative">
                     <input
                       type="url"
-                      value={currentPrinterUrl}
+                      value={currentPrinterUrl || ''}
                       onChange={(e) => setCurrentPrinterUrl(e.target.value)}
                       placeholder={t('settingsView.printerUrlPlaceholder')}
-                      className="w-full bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs font-semibold rounded-xl p-3 pr-9 focus:outline-none focus:ring-1 focus:ring-green-500 font-mono"
+                      disabled={!isPrinterEnabled}
+                      className="w-full bg-zinc-50 disabled:bg-zinc-50/50 border border-zinc-200 disabled:border-zinc-100 text-zinc-800 disabled:text-zinc-300 text-xs font-semibold rounded-xl p-3 pr-9 focus:outline-none focus:ring-1 focus:ring-green-500 font-mono disabled:cursor-not-allowed transition-all"
                     />
                     <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-400">
                       <Globe size={14} />
@@ -960,8 +1278,10 @@ export default function SettingsView({
                 </div>
 
                 {/* API Key */}
-                <div className="flex flex-col gap-1.5 col-span-1 md:col-span-2">
-                  <label className="text-[10px] uppercase tracking-wider font-extrabold text-zinc-500">
+                <div className="md:col-span-4 flex flex-col gap-1.5">
+                  <label className={`text-[10px] uppercase tracking-wider font-extrabold transition-colors ${
+                    isPrinterEnabled ? 'text-zinc-500' : 'text-zinc-300'
+                  }`}>
                     {t('settingsView.printerApiKeyLabel')}
                   </label>
                   <div className="relative">
@@ -970,26 +1290,30 @@ export default function SettingsView({
                       value={currentPrinterApiKey}
                       onChange={(e) => setCurrentPrinterApiKey(e.target.value)}
                       placeholder={t('settingsView.printerApiKeyPlaceholder')}
-                      className="w-full bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs font-semibold rounded-xl p-3 pr-9 focus:outline-none focus:ring-1 focus:ring-green-500 font-mono"
+                      disabled={!isPrinterEnabled}
+                      className="w-full bg-zinc-50 disabled:bg-zinc-50/50 border border-zinc-200 disabled:border-zinc-100 text-zinc-805 disabled:text-zinc-300 text-xs font-semibold rounded-xl p-3 pr-9 focus:outline-none focus:ring-1 focus:ring-green-500 font-mono disabled:cursor-not-allowed transition-all"
                     />
                     <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-400">
                       <Key size={14} />
                     </div>
                   </div>
                 </div>
+
+                {/* Test button */}
+                <div className="md:col-span-2">
+                  <button
+                    type="button"
+                    onClick={handleTestPrinterConnection}
+                    disabled={!isPrinterEnabled || printerTestStatus === 'testing'}
+                    className="w-full h-[42px] px-4 py-2 bg-zinc-100 hover:bg-zinc-200 disabled:bg-zinc-50/50 disabled:opacity-50 text-zinc-805 disabled:text-zinc-300 text-xs font-bold rounded-xl border border-zinc-200 disabled:border-zinc-100 transition-all cursor-pointer whitespace-nowrap flex items-center justify-center active:scale-95 disabled:pointer-events-none"
+                  >
+                    {printerTestStatus === 'testing' ? t('settingsView.testingConnection') : t('settingsView.testConnectionBtn')}
+                  </button>
+                </div>
               </div>
 
-              {/* Printer Test Action button */}
+              {/* Printer Test Status representations */}
               <div className="flex flex-col gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={handleTestPrinterConnection}
-                  disabled={printerTestStatus === 'testing'}
-                  className="px-4 py-2 bg-zinc-100 hover:bg-zinc-250 disabled:opacity-50 text-zinc-700 text-[10px] font-black uppercase tracking-wider rounded-xl border border-zinc-200/60 shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer w-fit"
-                >
-                  {printerTestStatus === 'testing' ? t('settingsView.testingConnection') : t('settingsView.testPrinterBtn')}
-                </button>
-
                 {printerTestStatus === 'success' && (
                   <div className="p-3 bg-green-50 border border-green-200 text-green-800 rounded-xl text-xs space-y-1">
                     <div className="font-bold flex items-center gap-1.5">
