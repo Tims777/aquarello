@@ -52,14 +52,12 @@ export default function ResultView({
   const [selectedVariants, setSelectedVariants] = useState<number[]>([]);
   const [isPrinting, setIsPrinting] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
-  const [zoomedImage, setZoomedImage] = useState<string | null>(null);
   const [zoomedIndex, setZoomedIndex] = useState<number | null>(null);
 
   // Discard selection/zoom state when results view is inactive
   useEffect(() => {
     if (!isActive) {
       setSelectedVariants([]);
-      setZoomedImage(null);
       setZoomedIndex(null);
     }
   }, [isActive]);
@@ -95,6 +93,9 @@ export default function ResultView({
   )}`;
 
   const displayImage = capturedImage || localStorage.getItem('last_captured_image') || fallbackSvg;
+  const zoomedImage = zoomedIndex === null
+    ? null
+    : getImgUrlForIndex(zoomedIndex);
 
   // Dynamic Landscape Orientation Detector
   useEffect(() => {
@@ -140,7 +141,6 @@ export default function ResultView({
     if (total <= 1) return;
     const nextIdx = (zoomedIndex - 1 + total) % total;
     setZoomedIndex(nextIdx);
-    setZoomedImage(getImgUrlForIndex(nextIdx));
   };
 
   const handleNextZoom = (e?: React.MouseEvent) => {
@@ -150,7 +150,6 @@ export default function ResultView({
     if (total <= 1) return;
     const nextIdx = (zoomedIndex + 1) % total;
     setZoomedIndex(nextIdx);
-    setZoomedImage(getImgUrlForIndex(nextIdx));
   };
 
   const toggleCurrentSelection = (e?: React.MouseEvent) => {
@@ -164,7 +163,6 @@ export default function ResultView({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        setZoomedImage(null);
         setZoomedIndex(null);
       } else if (e.key === 'ArrowLeft') {
         if (zoomedIndex !== null) {
@@ -172,7 +170,6 @@ export default function ResultView({
           if (total > 1) {
             const nextIdx = (zoomedIndex - 1 + total) % total;
             setZoomedIndex(nextIdx);
-            setZoomedImage(getImgUrlForIndex(nextIdx));
           }
         }
       } else if (e.key === 'ArrowRight') {
@@ -181,14 +178,13 @@ export default function ResultView({
           if (total > 1) {
             const nextIdx = (zoomedIndex + 1) % total;
             setZoomedIndex(nextIdx);
-            setZoomedImage(getImgUrlForIndex(nextIdx));
           }
         }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [zoomedIndex, capturedImages.length, parallelJobs, finalResult, genaiFilterOn, comfyLivePreviewsEnabled, previews]);
+  }, [zoomedIndex, capturedImages.length, failedCapturesCount, parallelJobs]);
 
   const handlePrintRequest = () => {
     if (selectedVariants.length === 0) return;
@@ -212,7 +208,7 @@ export default function ResultView({
       if (prev.includes(idx)) {
         return prev.filter(v => v !== idx);
       } else {
-        return [...prev, idx];
+        return [...prev, idx].sort((a, b) => a - b);
       }
     });
   };
@@ -365,8 +361,8 @@ export default function ResultView({
                     </div>
                   )}
 
-                  {!canInteract ? (
-                     /* Processing Glassmorphism Overlay */
+                  {!canInteract && (
+                    /* Processing Glassmorphism Overlay */
                     <div className="absolute inset-0 bg-white/20 backdrop-blur-[1.5px] flex flex-col items-center justify-center p-6 text-center">
                       <motion.div 
                         animate={{ rotate: 360 }}
@@ -381,23 +377,24 @@ export default function ResultView({
                         </p>
                       </div>
                     </div>
-                  ) : (
-                    <>
-                      {/* Zoom View utility toggle - disable if variant is failed and active context is GenAI */}
-                      {!(genaiFilterOn && isFailed) && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setZoomedIndex(idx);
-                            setZoomedImage(imgUrl);
-                          }}
-                          className="absolute bottom-4 right-4 bg-white hover:bg-zinc-100 text-zinc-800 p-2 h-9 w-9 rounded-xl shadow-lg border border-zinc-200 transition-all flex items-center justify-center z-10 hover:scale-105"
-                          title={t('resultView.zoomImage')}
-                        >
-                          <ZoomIn size={15} />
-                        </button>
-                      )}
+                  )}
 
+                  {/* Zoom remains available while the image is processing. */}
+                  {!(genaiFilterOn && isFailed) && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setZoomedIndex(idx);
+                      }}
+                      className="absolute bottom-4 right-4 bg-white hover:bg-zinc-100 text-zinc-800 p-2 h-9 w-9 rounded-xl shadow-lg border border-zinc-200 transition-all flex items-center justify-center z-30 hover:scale-105"
+                      title={t('resultView.zoomImage')}
+                    >
+                      <ZoomIn size={15} />
+                    </button>
+                  )}
+
+                  {canInteract && (
+                    <>
                       {/* Selection checkmark in the upper-left */}
                       {isSelected ? (
                         <motion.div 
@@ -503,15 +500,18 @@ export default function ResultView({
 
       {/* Zoom / Lightbox Modal Overlay */}
       <AnimatePresence>
-        {zoomedImage && (
-          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
+        {zoomedIndex !== null && zoomedImage && (
+          <motion.div
+            key="result-lightbox"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2, ease: 'easeOut' }}
+            className="fixed inset-0 z-[200] flex items-center justify-center p-4"
+          >
+            <div
               className="absolute inset-0 bg-black/95 backdrop-blur-xl"
               onClick={() => {
-                setZoomedImage(null);
                 setZoomedIndex(null);
               }}
             />
@@ -528,7 +528,6 @@ export default function ResultView({
             {/* Close trigger button */}
             <button 
               onClick={() => {
-                setZoomedImage(null);
                 setZoomedIndex(null);
               }}
               className="absolute top-8 right-8 z-[210] w-12 h-12 bg-white/10 hover:bg-white/20 border border-white/10 text-white rounded-full flex items-center justify-center transition-all duration-200"
@@ -559,10 +558,11 @@ export default function ResultView({
             )}
 
             <motion.div 
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className={`relative max-w-5xl max-h-[70vh] overflow-hidden rounded-[2rem] border shadow-2xl z-[205] transition-all duration-300 ${
+              initial={{ scale: 0.95 }}
+              animate={{ scale: 1 }}
+              exit={{ scale: 0.95 }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+              className={`relative max-w-5xl max-h-[70vh] overflow-hidden rounded-[2rem] border shadow-2xl z-[205] transition-colors duration-200 ${
                 zoomedIndex !== null && selectedVariants.includes(zoomedIndex)
                   ? 'border-green-500 ring-8 ring-green-500/35'
                   : 'border-white/10'
@@ -691,7 +691,7 @@ export default function ResultView({
                 )}
               </div>
             )}
-          </div>
+          </motion.div>
         )}
       </AnimatePresence>
 

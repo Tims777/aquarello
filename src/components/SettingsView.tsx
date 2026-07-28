@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { X, Camera, Globe, Check, Sliders, ShieldAlert, Moon, Code, Sparkles, Key, Info, Cpu, Printer } from 'lucide-react';
-import { parseComfyUrl, getComfySystemStats } from '../services/comfyService';
+import {
+  getComfySystemStats,
+  openComfyWebSocket,
+  parseComfyUrl,
+} from '../services/comfyService';
 import { parsePrinterUrl, listPrinters } from '../services/printService';
 import { t } from '../utils/i18n';
 
@@ -278,41 +282,10 @@ export default function SettingsView({
 
     // Now attempt a WebSocket handshake test to verify whether live preview is supported without blocks
     try {
-      const wsUrl = config.baseUrl.replace(/^http/, 'ws') + '/ws?clientId=test_handshake_' + Math.random().toString(36).substring(7);
-      console.log('[WebSocket Handshake Test] Verifying path:', wsUrl);
-      
-      const testWs = new WebSocket(wsUrl);
-      let isSettled = false;
-
-      const wsPromise = new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          if (!isSettled) {
-            isSettled = true;
-            try { testWs.close(); } catch {}
-            reject(new Error('WebSocket connection test timed out (2.5 seconds limit).'));
-          }
-        }, 2500);
-
-        testWs.onopen = () => {
-          if (!isSettled) {
-            isSettled = true;
-            clearTimeout(timeout);
-            try { testWs.close(); } catch {}
-            resolve();
-          }
-        };
-
-        testWs.onerror = (e) => {
-          if (!isSettled) {
-            isSettled = true;
-            clearTimeout(timeout);
-            try { testWs.close(); } catch {}
-            reject(new Error('WebSocket connection triggered an error event.'));
-          }
-        };
-      });
-
-      await wsPromise;
+      const clientId = 'test_handshake_' + Math.random().toString(36).substring(7);
+      console.log('[WebSocket Handshake Test] Verifying path:', config.wsUrl);
+      const testWs = await openComfyWebSocket(config, clientId, 2500);
+      testWs.close(1000, 'Connection test complete');
       setWsTestStatus('success');
     } catch (wsErr: any) {
       console.warn('[WebSocket Handshake Test] Encountered error or timeout:', wsErr);

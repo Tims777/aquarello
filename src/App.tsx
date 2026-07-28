@@ -10,8 +10,9 @@ import {
   parseComfyUrl, 
   uploadImageToComfy, 
   queuePromptToComfy, 
-  getComfyHistory, 
-  fetchComfyViewUrl 
+  fetchComfyViewUrl,
+  openComfyWebSocket,
+  waitForComfyHistory,
 } from './services/comfyService';
 import { parsePrinterUrl, printImage } from './services/printService';
 import { t } from './utils/i18n';
@@ -267,14 +268,12 @@ export default function App() {
     if (config) {
       console.log('Initiating ComfyUI pipeline to:', config.baseUrl);
       
-      let pollInterval: NodeJS.Timeout | null = null;
       const wsConnections: WebSocket[] = [];
+      const completionAbort = new AbortController();
 
       // Ensure we clear connections on unmount or retry
       const cleanUp = () => {
-        if (pollInterval) {
-          clearInterval(pollInterval);
-        }
+        completionAbort.abort();
         wsConnections.forEach(ws => {
           try {
             ws.close();
@@ -300,15 +299,92 @@ export default function App() {
           completed: boolean;
           imageUrl: string | null;
           step: number;
-          errorCount?: number;
+          socket: WebSocket | null;
         }
 
         const jobs: ComfyJobState[] = [];
         const basePromptObj = JSON.parse(comfyWorkflow);
         const localSeeds: number[] = [];
 
+        const finishIfAllJobsCompleted = () => {
+          if (
+            jobs.length === finalImages.length &&
+            jobs.every(job => job.completed)
+          ) {
+            console.log('All parallel jobs finished.');
+            cleanUp();
+          }
+        };
+
+        const failJob = (job: ComfyJobState, index: number, error: unknown) => {
+          if (job.completed) return;
+          console.error(`ComfyUI Job ${index + 1} failed:`, error);
+          job.completed = true;
+          job.socket?.close(1011, 'Job failed');
+          setFinalResult(prev => {
+            if (!prev) return prev;
+            const updatedCompleted = prev.completed ? [...prev.completed] : Array(finalImages.length).fill(false);
+            const updatedFailed = prev.failed ? [...prev.failed] : Array(finalImages.length).fill(false);
+            updatedCompleted[index] = true;
+            updatedFailed[index] = true;
+            return {
+              ...prev,
+              completed: updatedCompleted,
+              failed: updatedFailed
+            };
+          });
+          finishIfAllJobsCompleted();
+        };
+
+        const completeJob = async (
+          job: ComfyJobState,
+          index: number,
+          historyEntry: any
+        ) => {
+          if (job.completed) return;
+          const imgOutputs = historyEntry.outputs ?? {};
+          job.imageUrl = finalImages[index] || base64Image;
+
+          for (const nodeId in imgOutputs) {
+            const outImages = imgOutputs[nodeId].images;
+            if (outImages && Array.isArray(outImages) && outImages.length > 0) {
+              const img = outImages[0];
+              job.imageUrl = await fetchComfyViewUrl(config, img.filename, img.subfolder, img.type);
+              break;
+            }
+          }
+
+          job.completed = true;
+          job.step = 4;
+          job.socket?.close(1000, 'Job complete');
+          setFinalResult(prev => {
+            if (!prev) return prev;
+            const updatedVariants = [...prev.variants];
+            const updatedCompleted = prev.completed ? [...prev.completed] : Array(finalImages.length).fill(false);
+            const updatedFailed = prev.failed ? [...prev.failed] : Array(finalImages.length).fill(false);
+            updatedVariants[index] = job.imageUrl || finalImages[index] || base64Image;
+            updatedCompleted[index] = true;
+            updatedFailed[index] = false;
+            return {
+              ...prev,
+              variants: updatedVariants,
+              completed: updatedCompleted,
+              failed: updatedFailed
+            };
+          });
+          finishIfAllJobsCompleted();
+        };
+
         for (let i = 0; i < finalImages.length; i++) {
           const clientId = 'booth_' + Math.random().toString(36).substring(2, 11) + '_' + i;
+          const job: ComfyJobState = {
+            promptId: 'pending',
+            clientId,
+            completed: false,
+            imageUrl: null,
+            step: 0,
+            socket: null
+          };
           
           // Deep clone the base template
           const activePromptObj = JSON.parse(JSON.stringify(basePromptObj));
@@ -356,9 +432,9 @@ export default function App() {
           // Establish the live preview websocket if enabled
           if (comfyLivePreviewsEnabled) {
             try {
-              const wsUrl = config.baseUrl.replace(/^http/, 'ws') + '/ws?clientId=' + clientId;
               console.log(`[WebSocket] Connecting primary live preview WS for Job ${i + 1} client: ${clientId}`);
-              const ws = new WebSocket(wsUrl);
+              const ws = await openComfyWebSocket(config, clientId);
+              job.socket = ws;
               ws.binaryType = 'arraybuffer';
               ws.onmessage = (event) => {
                 if (event.data instanceof ArrayBuffer) {
@@ -401,44 +477,33 @@ export default function App() {
           try {
             console.log(`Queueing workflow prompt for concurrent Job ${i + 1}/${finalImages.length}...`);
             const promptRes = await queuePromptToComfy(config, activePromptObj, clientId);
-            jobs.push({
-              promptId: promptRes.prompt_id,
-              clientId,
-              completed: false,
-              imageUrl: null,
-              step: 0
-            });
+            job.promptId = promptRes.prompt_id;
+            jobs.push(job);
+            void waitForComfyHistory(
+              config,
+              job.promptId,
+              job.socket,
+              completionAbort.signal
+            ).then(historyEntry => completeJob(job, i, historyEntry))
+              .catch(error => {
+                if (error instanceof DOMException && error.name === 'AbortError') return;
+                failJob(job, i, error);
+              });
           } catch (qErr) {
             console.error(`Queueing prompt failed for concurrent Job ${i + 1}:`, qErr);
-            setFinalResult(prev => {
-              if (!prev) return prev;
-              const updatedCompleted = prev.completed ? [...prev.completed] : Array(finalImages.length).fill(false);
-              const updatedFailed = prev.failed ? [...prev.failed] : Array(finalImages.length).fill(false);
-              updatedCompleted[i] = true;
-              updatedFailed[i] = true;
-              return {
-                ...prev,
-                completed: updatedCompleted,
-                failed: updatedFailed
-              };
-            });
-            jobs.push({
-              promptId: 'failed',
-              clientId,
-              completed: true,
-              imageUrl: null,
-              step: 0
-            });
+            job.promptId = 'failed';
+            jobs.push(job);
+            failJob(job, i, qErr);
           }
         }
 
         setOriginalSeeds(localSeeds);
 
         const updateVisualPreviews = () => {
-          setPreviews(() => {
+          setPreviews(current => {
             const next = [];
             for (let b = 0; b < finalImages.length; b++) {
-              next.push({
+              next.push(current.find(preview => preview.batch === b) ?? {
                 step: jobs[b].step,
                 batch: b,
                 preview: finalImages[b] || base64Image
@@ -450,92 +515,7 @@ export default function App() {
 
         // Initialize progress
         updateVisualPreviews();
-
-        // Step 4: Fallback active status polling for all n parallel jobs
-        pollInterval = setInterval(async () => {
-          let anyChange = false;
-          let allCompleted = true;
-
-          for (let i = 0; i < jobs.length; i++) {
-            const job = jobs[i];
-            if (job.completed || job.promptId === 'failed') continue;
-
-            allCompleted = false;
-            try {
-              console.log(`Polling status for Job ${i + 1} (Prompt: ${job.promptId})`);
-              const historyData = await getComfyHistory(config, job.promptId);
-              
-              if (historyData && historyData[job.promptId]) {
-                const imgOutputs = historyData[job.promptId].outputs;
-                let gotImage = false;
-                
-                for (const nodeId in imgOutputs) {
-                  const outImages = imgOutputs[nodeId].images;
-                  if (outImages && Array.isArray(outImages) && outImages.length > 0) {
-                    const img = outImages[0];
-                    const secureUrl = await fetchComfyViewUrl(config, img.filename, img.subfolder, img.type);
-                    job.imageUrl = secureUrl;
-                    gotImage = true;
-                    break;
-                  }
-                }
-                
-                if (!gotImage) {
-                  job.imageUrl = finalImages[i] || base64Image;
-                }
-                
-                job.completed = true;
-                job.step = 4;
-                anyChange = true;
-
-                // Update final result IMMEDIATELY for this variant!
-                setFinalResult(prev => {
-                  if (!prev) return prev;
-                  const updatedVariants = [...prev.variants];
-                  const updatedCompleted = prev.completed ? [...prev.completed] : Array(finalImages.length).fill(false);
-                  const updatedFailed = prev.failed ? [...prev.failed] : Array(finalImages.length).fill(false);
-                  updatedVariants[i] = job.imageUrl || finalImages[i] || base64Image;
-                  updatedCompleted[i] = true;
-                  updatedFailed[i] = false;
-                  return {
-                    ...prev,
-                    variants: updatedVariants,
-                    completed: updatedCompleted,
-                    failed: updatedFailed
-                  };
-                });
-              }
-            } catch (pollErr) {
-              console.error(`Status polling step error for Job ${i + 1}:`, pollErr);
-              job.errorCount = (job.errorCount || 0) + 1;
-              if (job.errorCount > 15) {
-                console.warn(`Polling failed 15 times for Job ${i + 1}. Declaring failure.`);
-                job.completed = true;
-                setFinalResult(prev => {
-                  if (!prev) return prev;
-                  const updatedCompleted = prev.completed ? [...prev.completed] : Array(finalImages.length).fill(false);
-                  const updatedFailed = prev.failed ? [...prev.failed] : Array(finalImages.length).fill(false);
-                  updatedCompleted[i] = true;
-                  updatedFailed[i] = true;
-                  return {
-                    ...prev,
-                    completed: updatedCompleted,
-                    failed: updatedFailed
-                  };
-                });
-              }
-            }
-          }
-
-          if (anyChange) {
-            updateVisualPreviews();
-          }
-
-          if (allCompleted) {
-            clearInterval(pollInterval!);
-            console.log('All parallel jobs finished.');
-          }
-        }, 1500);
+        finishIfAllJobsCompleted();
 
         (window as any).__comfyCleanup = cleanUp;
         return;
@@ -641,13 +621,11 @@ export default function App() {
 
     if (config) {
       console.log(`[Regenerate] Starting single ComfyUI job for index ${index}...`);
-      let pollInterval: NodeJS.Timeout | null = null;
       let ws: WebSocket | null = null;
+      const completionAbort = new AbortController();
 
       const cleanUpRegen = () => {
-        if (pollInterval) {
-          clearInterval(pollInterval);
-        }
+        completionAbort.abort();
         if (ws) {
           try {
             ws.close();
@@ -705,9 +683,8 @@ export default function App() {
         // Establish live preview websocket client if enabled
         if (comfyLivePreviewsEnabled) {
           try {
-            const wsUrl = config.baseUrl.replace(/^http/, 'ws') + '/ws?clientId=' + clientId;
             console.log(`[WebSocket] Selective regenerate connection to ws client: ${clientId}`);
-            ws = new WebSocket(wsUrl);
+            ws = await openComfyWebSocket(config, clientId);
             ws.binaryType = 'arraybuffer';
             ws.onmessage = (event) => {
               if (event.data instanceof ArrayBuffer) {
@@ -742,63 +719,40 @@ export default function App() {
 
         const promptRes = await queuePromptToComfy(config, activePromptObj, clientId);
         const promptId = promptRes.prompt_id;
+        const historyEntry = await waitForComfyHistory(
+          config,
+          promptId,
+          ws,
+          completionAbort.signal
+        );
+        const imgOutputs = historyEntry.outputs ?? {};
+        let finalUrl = base64Image;
 
-        let errorCount = 0;
-        pollInterval = setInterval(async () => {
-          try {
-            const historyData = await getComfyHistory(config, promptId);
-            if (historyData && historyData[promptId]) {
-              cleanUpRegen();
-              const imgOutputs = historyData[promptId].outputs;
-              let finalUrl = base64Image;
-
-              for (const nodeId in imgOutputs) {
-                const outImages = imgOutputs[nodeId].images;
-                if (outImages && Array.isArray(outImages) && outImages.length > 0) {
-                  const img = outImages[0];
-                  finalUrl = await fetchComfyViewUrl(config, img.filename, img.subfolder, img.type);
-                  break;
-                }
-              }
-
-              setFinalResult(prev => {
-                if (!prev) return prev;
-                const updatedVariants = [...prev.variants];
-                const updatedCompleted = prev.completed ? [...prev.completed] : Array(prev.variants.length).fill(true);
-                const updatedFailed = prev.failed ? [...prev.failed] : Array(prev.variants.length).fill(false);
-                updatedVariants[index] = finalUrl;
-                updatedCompleted[index] = true;
-                updatedFailed[index] = false;
-                return {
-                  ...prev,
-                  variants: updatedVariants,
-                  completed: updatedCompleted,
-                  failed: updatedFailed
-                };
-              });
-            }
-          } catch (pollErr) {
-            console.error(`Status polling error for regenerate Job:`, pollErr);
-            errorCount++;
-            if (errorCount > 15) {
-              console.warn(`Selective regenerate polling failed 15 times! Declaring failure.`);
-              cleanUpRegen();
-              setFinalResult(prev => {
-                if (!prev) return prev;
-                const updatedCompleted = prev.completed ? [...prev.completed] : Array(prev.variants.length).fill(true);
-                const updatedFailed = prev.failed ? [...prev.failed] : Array(prev.variants.length).fill(false);
-                updatedCompleted[index] = true;
-                updatedFailed[index] = true;
-                return {
-                  ...prev,
-                  completed: updatedCompleted,
-                  failed: updatedFailed
-                };
-              });
-            }
+        for (const nodeId in imgOutputs) {
+          const outImages = imgOutputs[nodeId].images;
+          if (outImages && Array.isArray(outImages) && outImages.length > 0) {
+            const img = outImages[0];
+            finalUrl = await fetchComfyViewUrl(config, img.filename, img.subfolder, img.type);
+            break;
           }
-        }, 1500);
+        }
 
+        cleanUpRegen();
+        setFinalResult(prev => {
+          if (!prev) return prev;
+          const updatedVariants = [...prev.variants];
+          const updatedCompleted = prev.completed ? [...prev.completed] : Array(prev.variants.length).fill(true);
+          const updatedFailed = prev.failed ? [...prev.failed] : Array(prev.variants.length).fill(false);
+          updatedVariants[index] = finalUrl;
+          updatedCompleted[index] = true;
+          updatedFailed[index] = false;
+          return {
+            ...prev,
+            variants: updatedVariants,
+            completed: updatedCompleted,
+            failed: updatedFailed
+          };
+        });
         return;
       } catch (err) {
         console.error('Failed selective regeneration, falling back...', err);
@@ -1128,4 +1082,3 @@ export default function App() {
     </div>
   );
 }
-

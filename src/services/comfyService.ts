@@ -22,6 +22,188 @@ export interface ComfyPromptResponse {
   node_errors?: Record<string, any>;
 }
 
+/**
+ * Opens a ComfyUI WebSocket and resolves only after its handshake succeeds.
+ *
+ * Browser WebSockets cannot attach the HTTP headers from ComfyConfig, so an
+ * authenticated deployment must authenticate the upgrade with a cookie or a
+ * token understood by its reverse proxy.
+ */
+export async function openComfyWebSocket(
+  config: ComfyConfig,
+  clientId: string,
+  timeoutMs: number = 5000
+): Promise<WebSocket> {
+  const url = new URL(config.wsUrl);
+  url.searchParams.set('clientId', clientId);
+  const socket = new WebSocket(url);
+
+  await new Promise<void>((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      socket.close();
+      reject(new Error(`WebSocket handshake timed out after ${timeoutMs} ms: ${url}`));
+    }, timeoutMs);
+
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      socket.removeEventListener('open', handleOpen);
+      socket.removeEventListener('error', handleError);
+      socket.removeEventListener('close', handleClose);
+    };
+    const handleOpen = () => {
+      cleanup();
+      resolve();
+    };
+    const handleError = () => {
+      cleanup();
+      reject(new Error(`WebSocket handshake failed: ${url}`));
+    };
+    const handleClose = (event: CloseEvent) => {
+      cleanup();
+      reject(
+        new Error(
+          `WebSocket closed during handshake (${event.code}${
+            event.reason ? `: ${event.reason}` : ''
+          }): ${url}`
+        )
+      );
+    };
+
+    socket.addEventListener('open', handleOpen, { once: true });
+    socket.addEventListener('error', handleError, { once: true });
+    socket.addEventListener('close', handleClose, { once: true });
+  });
+
+  return socket;
+}
+
+/**
+ * Waits for ComfyUI to finish a prompt.
+ *
+ * A healthy socket is the primary completion signal. History is queried once
+ * after that signal. Periodic history checks begin only when the socket is
+ * unavailable or has been silent for long enough to be considered unhealthy.
+ */
+export async function waitForComfyHistory(
+  config: ComfyConfig,
+  promptId: string,
+  socket: WebSocket | null,
+  signal?: AbortSignal,
+  silenceMs: number = 10_000,
+  fallbackIntervalMs: number = 1500
+): Promise<any> {
+  let socketAvailable = socket?.readyState === WebSocket.OPEN;
+  let lastSocketActivity = Date.now();
+  let completionSignaled = false;
+  let executionError: Error | null = null;
+  let historyErrorCount = 0;
+  let lastHistoryError: unknown;
+  let wake: (() => void) | null = null;
+
+  const handleMessage = (event: MessageEvent) => {
+    lastSocketActivity = Date.now();
+    if (typeof event.data !== 'string') return;
+
+    try {
+      const message = JSON.parse(event.data);
+      const data = message?.data ?? {};
+      if (data.prompt_id && data.prompt_id !== promptId) return;
+
+      if (
+        (message.type === 'executing' && data.node === null) ||
+        message.type === 'execution_success'
+      ) {
+        completionSignaled = true;
+      } else if (
+        message.type === 'execution_error' ||
+        message.type === 'execution_interrupted'
+      ) {
+        executionError = new Error(
+          data.exception_message ||
+            data.exception_type ||
+            `ComfyUI reported ${message.type} for prompt ${promptId}`
+        );
+      }
+      wake?.();
+    } catch {
+      // Ignore non-JSON text frames from extensions.
+    }
+  };
+  const handleUnavailable = () => {
+    socketAvailable = false;
+    wake?.();
+  };
+
+  socket?.addEventListener('message', handleMessage);
+  socket?.addEventListener('error', handleUnavailable);
+  socket?.addEventListener('close', handleUnavailable);
+
+  const pause = () =>
+    new Promise<void>((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new DOMException('Operation aborted', 'AbortError'));
+        return;
+      }
+
+      let settled = false;
+      let timer = 0;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        signal?.removeEventListener('abort', abort);
+        wake = null;
+        resolve();
+      };
+      const abort = () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        wake = null;
+        reject(new DOMException('Operation aborted', 'AbortError'));
+      };
+
+      wake = finish;
+      timer = window.setTimeout(finish, fallbackIntervalMs);
+      signal?.addEventListener('abort', abort, { once: true });
+    });
+
+  try {
+    while (true) {
+      if (signal?.aborted) {
+        throw new DOMException('Operation aborted', 'AbortError');
+      }
+      if (executionError) throw executionError;
+
+      const socketSilent = Date.now() - lastSocketActivity >= silenceMs;
+      if (completionSignaled || !socketAvailable || socketSilent) {
+        try {
+          const history = await getComfyHistory(config, promptId);
+          historyErrorCount = 0;
+          if (history?.[promptId]) return history[promptId];
+        } catch (error) {
+          lastHistoryError = error;
+          historyErrorCount++;
+          if (historyErrorCount > 15) {
+            throw new Error(
+              `ComfyUI history fallback failed repeatedly for prompt ${promptId}`,
+              { cause: lastHistoryError }
+            );
+          }
+        }
+      }
+
+      await pause();
+    }
+  } finally {
+    socket?.removeEventListener('message', handleMessage);
+    socket?.removeEventListener('error', handleUnavailable);
+    socket?.removeEventListener('close', handleUnavailable);
+    wake?.();
+  }
+}
+
 // Convert dataURL to Blob
 export function dataURLtoBlob(dataurl: string): Blob {
   const arr = dataurl.split(',');
@@ -75,8 +257,9 @@ export function parseComfyUrl(urlStr: string, apiKey?: string): ComfyConfig | nu
     
     // Create WebSocket URL
     const wsProtocol = cleanUrl.protocol === 'https:' ? 'wss' : 'ws';
-    const credentialsPart = credentials ? `${encodeURIComponent(parsed.username)}:${encodeURIComponent(parsed.password)}@` : '';
-    const wsUrl = `${wsProtocol}://${credentialsPart}${cleanUrl.host}${apiPath}/ws`;
+    // Browsers reject WebSocket URLs containing username/password credentials.
+    // Authentication for the upgrade must be handled by a proxy cookie or token.
+    const wsUrl = `${wsProtocol}://${cleanUrl.host}${apiPath}/ws`;
     
     return {
       baseUrl,
