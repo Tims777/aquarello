@@ -21,7 +21,6 @@ interface CameraViewProps {
   remoteCameraApiKey?: string;
   showRemoteActivityLog?: boolean;
   parallelCapturesEnabled?: boolean;
-  apiNativeBurstEnabled?: boolean;
 }
 
 export default function CameraView({
@@ -41,7 +40,6 @@ export default function CameraView({
   remoteCameraApiKey,
   showRemoteActivityLog = false,
   parallelCapturesEnabled = false,
-  apiNativeBurstEnabled = true,
 }: CameraViewProps) {
   const [delay, setDelay] = useState(() => {
     const saved = localStorage.getItem('exposure_delay');
@@ -466,7 +464,7 @@ export default function CameraView({
     }
     setTimeout(() => setFlashActive(false), 400);
 
-    if (selectedWebcamId === 'remote-camera' && apiNativeBurstEnabled) {
+    if (selectedWebcamId === 'remote-camera') {
       const runRemoteBurst = async () => {
         let soundInterval: NodeJS.Timeout | null = null;
         let completedSoundCount = 1;

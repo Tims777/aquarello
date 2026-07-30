@@ -19,7 +19,6 @@ interface SettingsViewProps {
   parallelJobs: number;
   webcamRotation: string;
   genaiEnabled: boolean;
-  userPrompt: string;
   burstDelay: number;
   seedStrategy: 'timestamp' | 'sequence' | 'random';
   soundEffectsEnabled: boolean;
@@ -30,12 +29,13 @@ interface SettingsViewProps {
   printerUrl: string;
   printerApiKey: string;
   selectedPrinter: string;
+  printerMultiSelectEnabled: boolean;
+  printerAutoCloseEnabled: boolean;
   // Remote Camera properties
   remoteCameraUrl: string;
   remoteCameraApiKey: string;
   showRemoteActivityLog: boolean;
   parallelCapturesEnabled: boolean;
-  apiNativeBurstEnabled: boolean;
   onSave: (
     webcamId: string,
     url: string,
@@ -45,7 +45,6 @@ interface SettingsViewProps {
     parallelJobs: number,
     webcamRotation: string,
     genaiEnabled: boolean,
-    userPrompt: string,
     burstDelay: number,
     seedStrategy: 'timestamp' | 'sequence' | 'random',
     // Module 3 - Printer properties saved
@@ -53,6 +52,8 @@ interface SettingsViewProps {
     printerUrl: string,
     printerApiKey: string,
     selectedPrinter: string,
+    printerMultiSelectEnabled: boolean,
+    printerAutoCloseEnabled: boolean,
     soundEffectsEnabled: boolean,
     comfyLivePreviewsEnabled: boolean,
     customPromptModeEnabled: boolean,
@@ -60,8 +61,7 @@ interface SettingsViewProps {
     remoteCameraUrl: string,
     remoteCameraApiKey: string,
     showRemoteActivityLog: boolean,
-    parallelCapturesEnabled: boolean,
-    apiNativeBurstEnabled: boolean
+    parallelCapturesEnabled: boolean
   ) => void;
 }
 
@@ -75,7 +75,6 @@ export default function SettingsView({
   parallelJobs,
   webcamRotation,
   genaiEnabled,
-  userPrompt,
   burstDelay,
   seedStrategy,
   soundEffectsEnabled,
@@ -85,12 +84,13 @@ export default function SettingsView({
   printerUrl,
   printerApiKey,
   selectedPrinter,
+  printerMultiSelectEnabled,
+  printerAutoCloseEnabled,
   onSave,
   remoteCameraUrl,
   remoteCameraApiKey,
   showRemoteActivityLog,
   parallelCapturesEnabled,
-  apiNativeBurstEnabled,
 }: SettingsViewProps) {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [currentWebcam, setCurrentWebcam] = useState(selectedWebcamId);
@@ -101,20 +101,20 @@ export default function SettingsView({
   const [currentWorkflow, setCurrentWorkflow] = useState(comfyWorkflow);
   const [currentParallelJobs, setCurrentParallelJobs] = useState(parallelJobs);
   const [isGenaiEnabled, setIsGenaiEnabled] = useState(genaiEnabled);
-  const [currentUserPrompt, setCurrentUserPrompt] = useState(userPrompt);
   const [currentBurstDelay, setCurrentBurstDelay] = useState(burstDelay);
   const [currentSeedStrategy, setCurrentSeedStrategy] = useState<'timestamp' | 'sequence' | 'random'>(seedStrategy);
   const [currentSoundEffectsEnabled, setCurrentSoundEffectsEnabled] = useState(soundEffectsEnabled);
   const [isComfyLivePreviewsEnabled, setIsComfyLivePreviewsEnabled] = useState(comfyLivePreviewsEnabled);
   const [isCustomPromptModeEnabled, setIsCustomPromptModeEnabled] = useState(customPromptModeEnabled);
   const [currentParallelCapturesEnabled, setCurrentParallelCapturesEnabled] = useState(parallelCapturesEnabled || false);
-  const [currentApiNativeBurstEnabled, setCurrentApiNativeBurstEnabled] = useState(apiNativeBurstEnabled ?? true);
 
   // Module 3 - Printer States
   const [isPrinterEnabled, setIsPrinterEnabled] = useState(printerEnabled);
   const [currentPrinterUrl, setCurrentPrinterUrl] = useState(printerUrl);
   const [currentPrinterApiKey, setCurrentPrinterApiKey] = useState(printerApiKey);
   const [currentSelectedPrinter, setCurrentSelectedPrinter] = useState(selectedPrinter);
+  const [currentPrinterMultiSelectEnabled, setCurrentPrinterMultiSelectEnabled] = useState(printerMultiSelectEnabled);
+  const [currentPrinterAutoCloseEnabled, setCurrentPrinterAutoCloseEnabled] = useState(printerAutoCloseEnabled);
 
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [permissionGranted, setPermissionGranted] = useState(true);
@@ -391,7 +391,6 @@ export default function SettingsView({
       currentParallelJobs,
       currentRotation,
       isGenaiEnabled,
-      currentUserPrompt,
       currentBurstDelay,
       currentSeedStrategy,
       // Printer parameters mapping
@@ -399,6 +398,8 @@ export default function SettingsView({
       currentPrinterUrl,
       currentPrinterApiKey,
       currentSelectedPrinter,
+      currentPrinterMultiSelectEnabled,
+      currentPrinterAutoCloseEnabled,
       currentSoundEffectsEnabled,
       isComfyLivePreviewsEnabled,
       isCustomPromptModeEnabled,
@@ -406,8 +407,7 @@ export default function SettingsView({
       remoteUrl,
       remoteApiKey,
       currentShowActivityLog,
-      currentParallelCapturesEnabled,
-      currentApiNativeBurstEnabled
+      currentParallelCapturesEnabled
     );
     setTimeout(() => {
       setSaveStatus('saved');
@@ -736,99 +736,54 @@ export default function SettingsView({
               </div>
             </div>
 
-            {/* Sound effects toggle */}
-            <div className="flex justify-between items-center bg-zinc-50 border border-zinc-200 rounded-xl p-3">
-              <div className="flex flex-col">
-                <span className="text-xs font-bold text-zinc-850">{t('settingsView.soundEffectsLabel')}</span>
-                <span className="text-[10px] text-zinc-400 font-sans">
-                  {t('settingsView.soundEffectsSub')}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setCurrentSoundEffectsEnabled(prev => !prev)}
-                className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                  currentSoundEffectsEnabled ? 'bg-green-500' : 'bg-zinc-200'
-                }`}
-              >
-                <span
-                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                    currentSoundEffectsEnabled ? 'translate-x-5' : 'translate-x-0'
-                  }`}
-                />
-              </button>
-            </div>
-
-            {/* Show Remote Activity Log Toggle */}
-            <div className="flex justify-between items-center bg-zinc-50 border border-zinc-200 rounded-xl p-3">
-              <div className="flex flex-col">
-                <span className="text-xs font-bold text-zinc-850">{t('settingsView.showActivityLog')}</span>
-                <span className="text-[10px] text-zinc-400 font-sans">
-                  {t('settingsView.displayRemoteEvents')}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setCurrentShowActivityLog(prev => !prev)}
-                className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                  currentShowActivityLog ? 'bg-green-500' : 'bg-zinc-200'
-                }`}
-              >
-                <span
-                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                    currentShowActivityLog ? 'translate-x-5' : 'translate-x-0'
-                  }`}
-                />
-              </button>
-            </div>
-
-            {/* API-Native DSLR Burst Toggle */}
-            <div className="flex justify-between items-center bg-zinc-50 border border-zinc-200 rounded-xl p-3">
-              <div className="flex flex-col">
-                <span className="text-xs font-bold text-zinc-850">{t('settingsView.apiNativeDslrBurst')}</span>
-                <span className="text-[10px] text-zinc-400 font-sans">
-                  {t('settingsView.apiNativeDslrBurstSub')}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setCurrentApiNativeBurstEnabled(prev => !prev)}
-                className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                  currentApiNativeBurstEnabled ? 'bg-green-500' : 'bg-zinc-200'
-                }`}
-              >
-                <span
-                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                    currentApiNativeBurstEnabled ? 'translate-x-5' : 'translate-x-0'
-                  }`}
-                />
-              </button>
-            </div>
-
-            {/* Parallel App Captures Toggle (Visible only when API-Native burst is disabled) */}
-            {!currentApiNativeBurstEnabled && (
-              <div className="flex justify-between items-center bg-zinc-50 border border-zinc-200 rounded-xl p-3 ml-4 border-l-4 border-l-green-500">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Sound effects toggle */}
+              <div className="flex justify-between items-center gap-4 bg-zinc-50 border border-zinc-200 rounded-xl p-3">
                 <div className="flex flex-col">
-                  <span className="text-xs font-bold text-zinc-850">{t('settingsView.parallelAppCaptures')}</span>
+                  <span className="text-xs font-bold text-zinc-850">{t('settingsView.soundEffectsLabel')}</span>
                   <span className="text-[10px] text-zinc-400 font-sans">
-                    {t('settingsView.parallelAppCapturesSub')}
+                    {t('settingsView.soundEffectsSub')}
                   </span>
                 </div>
                 <button
                   type="button"
-                  onClick={() => setCurrentParallelCapturesEnabled(prev => !prev)}
+                  onClick={() => setCurrentSoundEffectsEnabled(prev => !prev)}
                   className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                    currentParallelCapturesEnabled ? 'bg-green-500' : 'bg-zinc-200'
+                    currentSoundEffectsEnabled ? 'bg-green-500' : 'bg-zinc-200'
                   }`}
                 >
                   <span
                     className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                      currentParallelCapturesEnabled ? 'translate-x-5' : 'translate-x-0'
+                      currentSoundEffectsEnabled ? 'translate-x-5' : 'translate-x-0'
                     }`}
                   />
                 </button>
               </div>
-            )}
+
+              {/* Show Remote Activity Log Toggle */}
+              <div className="flex justify-between items-center gap-4 bg-zinc-50 border border-zinc-200 rounded-xl p-3">
+                <div className="flex flex-col">
+                  <span className="text-xs font-bold text-zinc-850">{t('settingsView.showActivityLog')}</span>
+                  <span className="text-[10px] text-zinc-400 font-sans">
+                    {t('settingsView.displayRemoteEvents')}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCurrentShowActivityLog(prev => !prev)}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    currentShowActivityLog ? 'bg-green-500' : 'bg-zinc-200'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      currentShowActivityLog ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+
           </section>
 
           {/* ========================================================== */}
@@ -1107,67 +1062,52 @@ export default function SettingsView({
                 </span>
               </div>
 
-              {/* CLIP Text encode Positive Prompt text input */}
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] uppercase tracking-wider font-extrabold text-zinc-500">
-                  {t('settingsView.promptInputLabel')}
-                </label>
-                <textarea
-                  value={currentUserPrompt}
-                  onChange={(e) => setCurrentUserPrompt(e.target.value)}
-                  rows={3}
-                  placeholder={t('settingsView.promptInputPlaceholder')}
-                  className="w-full text-xs p-3 border border-zinc-200 rounded-xl font-sans focus:outline-none focus:border-green-500 transition-all text-zinc-800 bg-zinc-50/20 font-medium"
-                />
-                <span className="text-[10px] text-zinc-400 font-sans italic leading-tight">
-                  {t('settingsView.promptInputSub')}
-                </span>
-              </div>
-
-              {/* ComfyUI Live Previews toggle */}
-              <div className="flex justify-between items-center bg-zinc-50 border border-zinc-200 rounded-xl p-3">
-                <div className="flex flex-col pr-4">
-                  <span className="text-xs font-bold text-zinc-850">{t('settingsView.comfyLivePreviews')}</span>
-                  <span className="text-[10px] text-zinc-400 font-sans">
-                    {t('settingsView.comfyLivePreviewsSub')}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsComfyLivePreviewsEnabled(prev => !prev)}
-                  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                    isComfyLivePreviewsEnabled ? 'bg-green-500' : 'bg-zinc-200'
-                  }`}
-                >
-                  <span
-                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                      isComfyLivePreviewsEnabled ? 'translate-x-5' : 'translate-x-0'
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* ComfyUI Live Previews toggle */}
+                <div className="flex justify-between items-center gap-4 bg-zinc-50 border border-zinc-200 rounded-xl p-3">
+                  <div className="flex flex-col">
+                    <span className="text-xs font-bold text-zinc-850">{t('settingsView.comfyLivePreviews')}</span>
+                    <span className="text-[10px] text-zinc-400 font-sans">
+                      {t('settingsView.comfyLivePreviewsSub')}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsComfyLivePreviewsEnabled(prev => !prev)}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      isComfyLivePreviewsEnabled ? 'bg-green-500' : 'bg-zinc-200'
                     }`}
-                  />
-                </button>
-              </div>
-
-              {/* Custom Prompt Mode toggle */}
-              <div className="flex justify-between items-center bg-zinc-50 border border-zinc-200 rounded-xl p-3">
-                <div className="flex flex-col pr-4">
-                  <span className="text-xs font-bold text-zinc-850">{t('settingsView.customPromptMode')}</span>
-                  <span className="text-[10px] text-zinc-400 font-sans">
-                    {t('settingsView.customPromptModeSub')}
-                  </span>
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                        isComfyLivePreviewsEnabled ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setIsCustomPromptModeEnabled(prev => !prev)}
-                  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                    isCustomPromptModeEnabled ? 'bg-green-500' : 'bg-zinc-200'
-                  }`}
-                >
-                  <span
-                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                      isCustomPromptModeEnabled ? 'translate-x-5' : 'translate-x-0'
+
+                {/* Custom Prompt Mode toggle */}
+                <div className="flex justify-between items-center gap-4 bg-zinc-50 border border-zinc-200 rounded-xl p-3">
+                  <div className="flex flex-col">
+                    <span className="text-xs font-bold text-zinc-850">{t('settingsView.customPromptMode')}</span>
+                    <span className="text-[10px] text-zinc-400 font-sans">
+                      {t('settingsView.customPromptModeSub')}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsCustomPromptModeEnabled(prev => !prev)}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      isCustomPromptModeEnabled ? 'bg-green-500' : 'bg-zinc-200'
                     }`}
-                  />
-                </button>
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                        isCustomPromptModeEnabled ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
               </div>
             </div>
           </section>
@@ -1336,6 +1276,52 @@ export default function SettingsView({
                 <span className="text-[10px] text-zinc-400 font-sans italic leading-tight">
                   {t('settingsView.printerSelectSub')}
                 </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="flex justify-between items-center gap-4 bg-zinc-50 border border-zinc-200 rounded-xl p-3">
+                <div className="flex flex-col">
+                  <span className="text-xs font-bold text-zinc-850">{t('settingsView.printerMultiSelect')}</span>
+                  <span className="text-[10px] text-zinc-400 font-sans">
+                    {t('settingsView.printerMultiSelectSub')}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPrinterMultiSelectEnabled(prev => !prev)}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    currentPrinterMultiSelectEnabled ? 'bg-green-500' : 'bg-zinc-200'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      currentPrinterMultiSelectEnabled ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div className="flex justify-between items-center gap-4 bg-zinc-50 border border-zinc-200 rounded-xl p-3">
+                <div className="flex flex-col">
+                  <span className="text-xs font-bold text-zinc-850">{t('settingsView.printerAutoClose')}</span>
+                  <span className="text-[10px] text-zinc-400 font-sans">
+                    {t('settingsView.printerAutoCloseSub')}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPrinterAutoCloseEnabled(prev => !prev)}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    currentPrinterAutoCloseEnabled ? 'bg-green-500' : 'bg-zinc-200'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      currentPrinterAutoCloseEnabled ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
               </div>
             </div>
           </section>

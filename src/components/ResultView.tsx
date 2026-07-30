@@ -16,10 +16,11 @@ interface ResultViewProps {
   parallelJobs: number;
   printerEnabled: boolean;
   selectedPrinterName?: string;
+  multiSelectEnabled?: boolean;
+  autoCloseEnabled?: boolean;
   genaiEnabled?: boolean;
   comfyLivePreviewsEnabled?: boolean;
   customPromptModeEnabled?: boolean;
-  userPrompt?: string;
   onCancelGeneration?: () => void;
   genaiFilterOn?: boolean;
   setGenaiFilterOn?: (val: boolean) => void;
@@ -39,10 +40,11 @@ export default function ResultView({
   parallelJobs,
   printerEnabled,
   selectedPrinterName,
+  multiSelectEnabled = true,
+  autoCloseEnabled = true,
   genaiEnabled = true,
   comfyLivePreviewsEnabled = true,
   customPromptModeEnabled = false,
-  userPrompt = '',
   onCancelGeneration,
   genaiFilterOn = true,
   setGenaiFilterOn,
@@ -61,6 +63,12 @@ export default function ResultView({
       setZoomedIndex(null);
     }
   }, [isActive]);
+
+  useEffect(() => {
+    if (!multiSelectEnabled) {
+      setSelectedVariants(prev => prev.length > 1 ? [prev[prev.length - 1]] : prev);
+    }
+  }, [multiSelectEnabled]);
   
   // Helper to dynamically resolve deep image paths for general state sync
   const getImgUrlForIndex = (i: number) => {
@@ -77,13 +85,9 @@ export default function ResultView({
 
   // States for one-off custom prompt edits during selective regeneration
   const [showCustomPromptModal, setShowCustomPromptModal] = useState(false);
-  const [customPromptText, setCustomPromptText] = useState(userPrompt);
+  const [customPromptText, setCustomPromptText] = useState('');
 
   const [isLandscape, setIsLandscape] = useState(false);
-
-  useEffect(() => {
-    setCustomPromptText(userPrompt);
-  }, [userPrompt]);
 
   const fallbackSvg = `data:image/svg+xml;utf8,${encodeURIComponent(
     `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1800" viewBox="0 0 1200 1800">
@@ -199,7 +203,9 @@ export default function ResultView({
     });
     setTimeout(() => {
       setIsPrinting(false);
-      onRestart();
+      if (autoCloseEnabled) {
+        onRestart();
+      }
     }, 2000);
   };
 
@@ -207,10 +213,27 @@ export default function ResultView({
     setSelectedVariants(prev => {
       if (prev.includes(idx)) {
         return prev.filter(v => v !== idx);
-      } else {
-        return [...prev, idx].sort((a, b) => a - b);
       }
+      return multiSelectEnabled ? [...prev, idx].sort((a, b) => a - b) : [idx];
     });
+  };
+
+  const handleDownloadRequest = () => {
+    if (selectedVariants.length === 0 || !finalResult) return;
+    selectedVariants.forEach(idx => {
+      const targetImg = genaiFilterOn
+        ? (finalResult?.variants?.[idx] || displayImage)
+        : (capturedImages[idx] || displayImage);
+      const link = document.createElement('a');
+      link.href = targetImg;
+      link.download = `booth-output-${idx + 1}${!genaiFilterOn ? '-original' : ''}.jpg`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    });
+    if (autoCloseEnabled) {
+      onRestart();
+    }
   };
 
   // Build grid responsive classes based on job count and landscape orientation
@@ -461,20 +484,7 @@ export default function ResultView({
               </button>
             ) : (
               <button
-                onClick={() => {
-                  if (selectedVariants.length === 0 || !finalResult) return;
-                  selectedVariants.forEach(idx => {
-                    const targetImg = genaiFilterOn 
-                      ? (finalResult?.variants?.[idx] || displayImage) 
-                      : (capturedImages[idx] || displayImage);
-                    const link = document.createElement('a');
-                    link.href = targetImg;
-                    link.download = `booth-output-${idx + 1}${!genaiFilterOn ? '-original' : ''}.jpg`;
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
-                  });
-                }}
+                onClick={handleDownloadRequest}
                 disabled={selectedVariants.length === 0 || (genaiFilterOn && finalResult && selectedVariants.some(idx => finalResult.completed?.[idx] === false))}
                 className="bg-zinc-950 hover:bg-green-600 text-white px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-lg transition-all flex items-center gap-2.5 disabled:bg-zinc-100 disabled:text-zinc-400 disabled:shadow-none border border-zinc-200/20 active:scale-95 duration-200"
               >
@@ -656,20 +666,7 @@ export default function ResultView({
                   </button>
                 ) : (
                   <button
-                    onClick={() => {
-                      if (selectedVariants.length === 0 || !finalResult) return;
-                      selectedVariants.forEach(idx => {
-                        const targetImg = genaiFilterOn 
-                          ? (finalResult?.variants?.[idx] || displayImage) 
-                          : (capturedImages[idx] || displayImage);
-                        const link = document.createElement('a');
-                        link.href = targetImg;
-                        link.download = `booth-output-${idx + 1}${!genaiFilterOn ? '-original' : ''}.jpg`;
-                        document.body.appendChild(link);
-                        link.click();
-                        document.body.removeChild(link);
-                      });
-                    }}
+                    onClick={handleDownloadRequest}
                     disabled={selectedVariants.length === 0 || (genaiFilterOn && finalResult && selectedVariants.some(idx => finalResult.completed?.[idx] === false))}
                     className="bg-zinc-950 hover:bg-green-600 text-white px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-lg transition-all flex items-center gap-2.5 disabled:bg-zinc-850 disabled:text-zinc-500 disabled:shadow-none border border-white/10 active:scale-95 duration-200 whitespace-nowrap flex-shrink-0"
                   >

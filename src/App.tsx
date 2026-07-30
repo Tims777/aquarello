@@ -48,9 +48,6 @@ export default function App() {
     const saved = localStorage.getItem('genai_enabled');
     return saved !== null ? saved === 'true' : false;
   });
-  const [userPrompt, setUserPrompt] = useState<string>(() => {
-    return localStorage.getItem('user_prompt') || 'photorealistic portrait, high quality, masterpiece, beautiful colors';
-  });
   const [burstDelay, setBurstDelay] = useState<number>(() => {
     const saved = localStorage.getItem('burst_delay');
     return saved !== null ? parseInt(saved, 10) : 500;
@@ -78,6 +75,14 @@ export default function App() {
   const [selectedPrinter, setSelectedPrinter] = useState<string>(() => {
     return localStorage.getItem('selected_printer') || '';
   });
+  const [printerMultiSelectEnabled, setPrinterMultiSelectEnabled] = useState<boolean>(() => {
+    const saved = localStorage.getItem('printer_multi_select_enabled');
+    return saved !== null ? saved === 'true' : true;
+  });
+  const [printerAutoCloseEnabled, setPrinterAutoCloseEnabled] = useState<boolean>(() => {
+    const saved = localStorage.getItem('printer_auto_close_enabled');
+    return saved !== null ? saved === 'true' : true;
+  });
   const [soundEffectsEnabled, setSoundEffectsEnabled] = useState<boolean>(() => {
     const saved = localStorage.getItem('sound_effects_enabled');
     return saved !== null ? saved === 'true' : true;
@@ -103,11 +108,6 @@ export default function App() {
   const [parallelCapturesEnabled, setParallelCapturesEnabled] = useState<boolean>(() => {
     return localStorage.getItem('parallel_captures_enabled') === 'true';
   });
-  const [apiNativeBurstEnabled, setApiNativeBurstEnabled] = useState<boolean>(() => {
-    const saved = localStorage.getItem('api_native_burst_enabled');
-    return saved !== null ? saved === 'true' : true;
-  });
-  
   // Sleep mode configuration and state
   const [isAsleep, setIsAsleep] = useState(false);
   const [sleepTimeout, setSleepTimeout] = useState<number>(() => {
@@ -412,18 +412,6 @@ export default function App() {
                 node.inputs[seedKey] = calculatedSeedValue;
                 jobSeedValue = calculatedSeedValue;
                 console.log(`[${node.class_type}] Injected ${seedKey} of ${calculatedSeedValue} utilizing strategy ${seedStrategy} into node #${nodeId} for Job ${i + 1}`);
-              } else if (node.class_type === 'CLIPTextEncode') {
-                // Safely avoid overwriting typical negative prompts in the workflow:
-                const textVal = String(node.inputs.text || '').toLowerCase();
-                const titleVal = String(node._meta?.title || '').toLowerCase();
-                const isNegative = textVal.includes('blurry') || 
-                                    textVal.includes('bad anatomy') || 
-                                    textVal.includes('monochrome') || 
-                                    titleVal.includes('negative');
-                if (!isNegative) {
-                  node.inputs.text = userPrompt;
-                  console.log(`[CLIPTextEncode] Injected user defined prompt into node #${nodeId} for Job ${i + 1}`);
-                }
               }
             }
           }
@@ -587,6 +575,7 @@ export default function App() {
   };
 
   const handleRegenerate = async (index: number, customPrompt?: string, keepSeed = false) => {
+    const customPromptOverride = customPrompt?.trim();
     if (lastCapturedImages.length === 0 || index < 0 || index >= lastCapturedImages.length) return;
     
     // Set only the targeted variant to non-completed state and clear failed
@@ -665,7 +654,7 @@ export default function App() {
             } else if (node.class_type === 'RandomNoise' || node.class_type === 'KSampler' || node.class_type === 'KSamplerAdvanced') {
               const seedKey = node.class_type === 'RandomNoise' ? 'noise_seed' : 'seed';
               node.inputs[seedKey] = seedToUse;
-            } else if (node.class_type === 'CLIPTextEncode') {
+            } else if (customPromptOverride && node.class_type === 'CLIPTextEncode') {
               const textVal = String(node.inputs.text || '').toLowerCase();
               const titleVal = String(node._meta?.title || '').toLowerCase();
               const isNegative = textVal.includes('blurry') || 
@@ -673,8 +662,8 @@ export default function App() {
                                   textVal.includes('monochrome') || 
                                   titleVal.includes('negative');
               if (!isNegative) {
-                node.inputs.text = customPrompt || userPrompt;
-                console.log(`[CLIPTextEncode] Injected ${customPrompt ? 'one-off custom' : 'default'} prompt into node #${nodeId} to regenerate index ${index + 1}`);
+                node.inputs.text = customPromptOverride;
+                console.log(`[CLIPTextEncode] Injected one-off custom prompt into node #${nodeId} to regenerate index ${index + 1}`);
               }
             }
           }
@@ -797,21 +786,21 @@ export default function App() {
     pJobs: number,
     rotation: string,
     gEnabled: boolean,
-    uPrompt: string,
     bDelay: number,
     sStrategy: 'timestamp' | 'sequence' | 'random',
     pEnabled: boolean,
     pUrl: string,
     pApiKey: string,
     sPrinter: string,
+    pMultiSelectEnabled: boolean,
+    pAutoCloseEnabled: boolean,
     sEffectsEnabled: boolean,
     comfyPreviewsEnabled: boolean,
     promptModeEnabled: boolean,
     rcUrl: string,
     rcApiKey: string,
     rcShowLog: boolean,
-    parallelCaptures: boolean,
-    apiNativeBurst: boolean
+    parallelCaptures: boolean
   ) => {
     const cleanedUrl = url ? url.trim().replace(/\/api\/?$/, '') : '';
     setSelectedWebcamId(webcamId);
@@ -822,13 +811,14 @@ export default function App() {
     setParallelJobs(pJobs);
     setWebcamRotation(rotation);
     setGenaiEnabled(gEnabled);
-    setUserPrompt(uPrompt);
     setBurstDelay(bDelay);
     setSeedStrategy(sStrategy);
     setPrinterEnabled(pEnabled);
     setPrinterUrl(pUrl);
     setPrinterApiKey(pApiKey);
     setSelectedPrinter(sPrinter);
+    setPrinterMultiSelectEnabled(pMultiSelectEnabled);
+    setPrinterAutoCloseEnabled(pAutoCloseEnabled);
     setSoundEffectsEnabled(sEffectsEnabled);
     setComfyLivePreviewsEnabled(comfyPreviewsEnabled);
     setCustomPromptModeEnabled(promptModeEnabled);
@@ -836,7 +826,6 @@ export default function App() {
     setRemoteCameraApiKey(rcApiKey);
     setShowRemoteActivityLog(rcShowLog);
     setParallelCapturesEnabled(parallelCaptures);
-    setApiNativeBurstEnabled(apiNativeBurst);
 
     localStorage.setItem('selected_webcam_id', webcamId);
     localStorage.setItem('genai_backend_url', cleanedUrl);
@@ -846,13 +835,14 @@ export default function App() {
     localStorage.setItem('parallel_jobs', pJobs.toString());
     localStorage.setItem('webcam_rotation', rotation);
     localStorage.setItem('genai_enabled', gEnabled.toString());
-    localStorage.setItem('user_prompt', uPrompt);
     localStorage.setItem('burst_delay', bDelay.toString());
     localStorage.setItem('seed_strategy', sStrategy);
     localStorage.setItem('printer_enabled', pEnabled.toString());
     localStorage.setItem('printer_url', pUrl);
     localStorage.setItem('printer_api_key', pApiKey);
     localStorage.setItem('selected_printer', sPrinter);
+    localStorage.setItem('printer_multi_select_enabled', pMultiSelectEnabled.toString());
+    localStorage.setItem('printer_auto_close_enabled', pAutoCloseEnabled.toString());
     localStorage.setItem('sound_effects_enabled', sEffectsEnabled.toString());
     localStorage.setItem('comfy_live_previews_enabled', comfyPreviewsEnabled.toString());
     localStorage.setItem('custom_prompt_mode_enabled', promptModeEnabled.toString());
@@ -860,7 +850,6 @@ export default function App() {
     localStorage.setItem('remote_camera_api_key', rcApiKey);
     localStorage.setItem('show_remote_activity_log', rcShowLog.toString());
     localStorage.setItem('parallel_captures_enabled', parallelCaptures.toString());
-    localStorage.setItem('api_native_burst_enabled', apiNativeBurst.toString());
   };
 
   const handlePrintAction = async (variantId: number, useOriginal = false) => {
@@ -939,7 +928,6 @@ export default function App() {
             remoteCameraApiKey={remoteCameraApiKey}
             showRemoteActivityLog={showRemoteActivityLog}
             parallelCapturesEnabled={parallelCapturesEnabled}
-            apiNativeBurstEnabled={apiNativeBurstEnabled}
           />
         </div>
         <div className={`w-full h-full absolute inset-0 transition-opacity duration-500 overflow-y-auto ${view === 'RESULT' ? 'opacity-100 z-20 bg-[#FCFCFD]' : 'opacity-0 pointer-events-none z-0'}`}>
@@ -955,10 +943,11 @@ export default function App() {
             parallelJobs={parallelJobs}
             printerEnabled={printerEnabled}
             selectedPrinterName={selectedPrinter}
+            multiSelectEnabled={printerMultiSelectEnabled}
+            autoCloseEnabled={printerAutoCloseEnabled}
             genaiEnabled={genaiEnabled}
             comfyLivePreviewsEnabled={comfyLivePreviewsEnabled}
             customPromptModeEnabled={customPromptModeEnabled}
-            userPrompt={userPrompt}
             onCancelGeneration={handleCancelGeneration}
             genaiFilterOn={genaiFilterOn}
             setGenaiFilterOn={setGenaiFilterOn}
@@ -1031,7 +1020,6 @@ export default function App() {
             parallelJobs={parallelJobs}
             webcamRotation={webcamRotation}
             genaiEnabled={genaiEnabled}
-            userPrompt={userPrompt}
             burstDelay={burstDelay}
             seedStrategy={seedStrategy}
             soundEffectsEnabled={soundEffectsEnabled}
@@ -1041,11 +1029,12 @@ export default function App() {
             printerUrl={printerUrl}
             printerApiKey={printerApiKey}
             selectedPrinter={selectedPrinter}
+            printerMultiSelectEnabled={printerMultiSelectEnabled}
+            printerAutoCloseEnabled={printerAutoCloseEnabled}
             remoteCameraUrl={remoteCameraUrl}
             remoteCameraApiKey={remoteCameraApiKey}
             showRemoteActivityLog={showRemoteActivityLog}
             parallelCapturesEnabled={parallelCapturesEnabled}
-            apiNativeBurstEnabled={apiNativeBurstEnabled}
             onSave={handleSaveSettings}
           />
         )}
